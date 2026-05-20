@@ -1,189 +1,301 @@
-# Qversity v2 — Fintech/Banking Data Engineering Project
+# Qversity Technical Project 2026 — Fintech/Banking Data Pipeline
 
-A containerized ELT data platform using Docker Compose with Airflow, PostgreSQL, PySpark, dbt, and PowerBI.
+> **End-to-end ELT pipeline** for a fictional LATAM Fintech company using PySpark, Apache Airflow, dbt, PostgreSQL, and PowerBI, fully containerized with Docker.
 
-## Architecture
+---
 
-This project implements a **Bronze-Silver-Gold** data lakehouse architecture for a LATAM Fintech/Banking dataset:
+## Author
 
-- **Bronze Layer**: Raw JSON ingestion from S3 into PostgreSQL (`jsonb`)
-- **Silver Layer (PySpark)**: Flatten nested arrays, deduplicate
-- **Silver Layer (dbt)**: Clean, standardize, and normalize PySpark output; flatten nested objects
-- **Gold Layer (dbt)**: Business-ready analytics and aggregations answering 24 business questions
-- **PowerBI**: 4-page dashboard connected to Gold layer tables
+| Field    | Info                          |
+|----------|-------------------------------|
+| **Name** | Simon Martinez                |
+| **Email** | simonmartinez1820@gmail.com |
+| **City** | Medellín, Colombia            |
+| **Cohort** | Qversity 2026              |
+
+---
+
+## Architecture Overview
 
 ```
-S3 (JSON) → Airflow → Bronze → PySpark (Silver) → dbt (Silver) → dbt (Gold) → PowerBI
+S3 (fintech_banking_dataset.json)
+│
+▼
+Apache Airflow (DAG: qversity_fintech_pipeline)
+│
+▼
+BRONZE — PostgreSQL (schema: bronze)
+  └── raw_fintech_data (id, data jsonb, load_timestamp)
+│
+├──────────► PySpark (inside Airflow container)
+│                └── Flatten arrays: accounts, transactions, loans
+│                └── Deduplicate records
+│                └── Write → silver.stg_accounts / stg_transactions / stg_loans
+│
+▼
+dbt (dbt-core + dbt-postgres)
+  ├── Silver models: clean, normalize, flatten nested objects
+  └── Gold models:  analytics tables answering 24 business questions
+│
+▼
+GOLD — PostgreSQL (schema: gold)
+│
+▼
+PowerBI Desktop
+  └── 4-page dashboard connected to gold schema
 ```
 
-## Project Structure
+---
 
-```
-qversity-data-2026-<city>-<firstname><lastname>/
-├── dags/                     # Airflow DAG definitions
-│   └── example_dag.py        # Placeholder pipeline DAG
-├── spark/                    # PySpark scripts (NEW in v2)
-├── dbt/                      # dbt project
-│   ├── models/
-│   │   ├── bronze/           # Raw data staging
-│   │   ├── silver/           # Cleaned and normalized data
-│   │   └── gold/             # Business analytics
-│   ├── tests/                # dbt tests
-│   ├── dbt_project.yml       # dbt configuration
-│   └── profiles.yml          # Database connections
-├── powerbi/                  # PowerBI deliverables (NEW in v2)
-│   ├── dashboard.pbix        # PowerBI file (you create this)
-│   └── screenshots/          # Dashboard page screenshots
-├── data/
-│   └── raw/                  # Raw input data
-├── docker-compose.yml        # Docker environment setup
-├── env.example               # Environment variables template
-├── requirements.txt          # Python dependencies
-├── .gitignore
-├── .pre-commit-config.yaml   # Code quality hooks
-└── README.md                 # This file
-```
+## Prerequisites
 
-## Quick Start
+Make sure the following tools are installed on your machine **before** running the project:
 
-### Prerequisites
+| Tool | Version | Download |
+|------|---------|----------|
+| Docker Desktop | Latest | https://www.docker.com/products/docker-desktop |
+| Docker Compose | Bundled with Docker Desktop | — |
+| Git | Latest | https://git-scm.com/downloads |
+| PowerBI Desktop | Latest | https://powerbi.microsoft.com/desktop |
+| Python *(optional, for local dev)* | 3.11+ | https://www.python.org/downloads |
 
-- Docker and Docker Compose installed
-- At least 4GB RAM available
-- PowerBI Desktop (for dashboard creation)
+> **Windows users:** Make sure Docker Desktop is running and WSL 2 backend is enabled before proceeding.
 
-### Setup
+> **Note:** Python, PySpark, Airflow, and dbt all run inside Docker containers — you do **not** need to install them locally unless you want to develop outside Docker.
 
-1. **Clone the repository and setup environment**:
+---
+
+## Environment Setup
+
+### 1. Clone the Repository
+
 ```bash
-git clone <your-repo-url>
-cd qversity-data-2026-<city>-<name>
-cp env.example .env
+git clone https://github.com/smartinezg2018/qversity-data-2026-medellin-simonmartinez.git
+cd qversity-data-2026-medellin-simonmartinez
 ```
 
-2. **Start services**:
+### 2. Configure Environment Variables
+
+Copy the example environment file and fill in your values:
+
+```bash
+# Linux / macOS
+cp env.example .env
+
+# Windows (PowerShell)
+Copy-Item env.example .env
+```
+
+Open `.env` and review the variables:
+
+```env
+# Docker Compose project name
+COMPOSE_PROJECT_NAME=qversity
+
+# Airflow
+AIRFLOW_UID=50000
+AIRFLOW_PROJ_DIR=.
+_AIRFLOW_WWW_USER_USERNAME=admin
+_AIRFLOW_WWW_USER_PASSWORD=admin
+
+# PostgreSQL
+POSTGRES_USER=qversity-admin
+POSTGRES_PASSWORD=qversity-admin
+POSTGRES_DB=qversity
+
+# dbt
+DBT_PROFILES_DIR=/dbt
+DBT_PROJECT_DIR=/dbt
+
+# S3 Data Source (public bucket — no credentials needed)
+S3_BUCKET=qversity-raw-public-data
+S3_KEY=fintech_banking_dataset.json
+```
+
+> **Never commit `.env` to Git.** It is already listed in `.gitignore`.  
+> The `env.example` file is safe to commit — it contains no real secrets.
+
+---
+
+### 3. Build and Start All Services
+
 ```bash
 docker compose up -d --build
 ```
 
-3. **Verify services are running**:
+This command will:
+1. Build the **Airflow** image (installs Java, PySpark, dbt, and the PostgreSQL JDBC driver)
+2. Pull the **PostgreSQL 15** image
+3. Start all containers in detached mode
+
+> The first build may take **5–10 minutes** due to dependency installation.
+
+#### Verify Services Are Healthy
+
 ```bash
 docker compose ps
 ```
 
-4. **Access Airflow UI**: http://localhost:8080 (admin/admin)
+Expected output (all services should show `running` or `healthy`):
 
-5. **Trigger the pipeline** (once you've built it):
-```bash
-docker compose exec airflow airflow dags trigger qversity_fintech_pipeline
+```
+NAME                  STATUS          PORTS
+qversity-postgres-1   running (healthy)   0.0.0.0:5432->5432/tcp
+qversity-airflow-1    running         0.0.0.0:8080->8080/tcp
+qversity-dbt-1        running
 ```
 
-## Access Points
+If PostgreSQL is not yet healthy, wait 30 seconds and run `docker compose ps` again.
 
-| Service | URL / Connection | Credentials |
-|---------|-----------------|-------------|
-| Airflow UI | http://localhost:8080 | admin / admin |
-| PostgreSQL | localhost:5432 | qversity-admin / qversity-admin |
-| Database | qversity | — |
+---
 
-## Common Commands
+### 4. Access the Airflow Web UI
 
-### Airflow
+Once the containers are running, open your browser and navigate to:
+
+```
+http://localhost:8080
+```
+
+Login with:
+- **Username:** `admin`
+- **Password:** `admin`
+
+---
+
+### 5. Configure the PostgreSQL Connection in Airflow
+
+Before triggering the DAG, set up the Airflow → PostgreSQL connection:
+
+1. In the Airflow UI, go to **Admin → Connections**
+2. Click **+** to add a new connection
+3. Fill in the fields:
+
+| Field | Value |
+|-------|-------|
+| Connection Id | `postgres_default` |
+| Connection Type | `Postgres` |
+| Host | `postgres` |
+| Schema | `qversity` |
+| Login | `qversity-admin` |
+| Password | `qversity-admin` |
+| Port | `5432` |
+
+4. Click **Save**
+
+---
+
+### 6. Activate and Run the Airflow DAG
+
+#### Option A — From the Console (recommended)
+
+All Airflow CLI commands run inside the `airflow` container via `docker compose exec`:
+
 ```bash
-# View logs
+# 1. Activate (unpause) the DAG
+docker compose exec airflow gosu airflow airflow dags unpause qversity_fintech_pipeline
+
+# 2. Trigger the DAG
+docker compose exec airflow gosu airflow airflow dags trigger qversity_fintech_pipeline
+```
+
+#### Monitoring from the console
+
+```bash
+# Check overall DAG run status
+docker compose exec airflow gosu airflow airflow dags list-runs -d qversity_fintech_pipeline
+
+# List all tasks in the DAG
+docker compose exec airflow gosu airflow airflow tasks list qversity_fintech_pipeline
+
+# Check the state of a specific task in the latest run
+docker compose exec airflow gosu airflow airflow tasks states-for-dag-run qversity_fintech_pipeline <execution_date>
+
+# View logs for a specific task
+docker compose exec airflow gosu airflow airflow tasks logs qversity_fintech_pipeline setup_schemas <execution_date>
+```
+
+> Replace `<execution_date>` with the run ID shown by `dags list-runs` (e.g. `manual__2026-05-20T22:00:00+00:00`).
+
+#### Option B — From the Web UI
+
+1. Open **http://localhost:8080** and log in (`admin` / `admin`)
+2. Find the DAG named **`qversity_fintech_pipeline`**
+3. Toggle it **ON** (enable it)
+4. Click the ▶ **Trigger DAG** button to run it manually
+5. Monitor task progress in the **Graph View** or **Grid View**
+
+
+---
+
+### 7. Connect PowerBI to PostgreSQL
+
+1. Open **PowerBI Desktop**
+2. Click **Get Data → PostgreSQL database**
+3. Enter the connection details:
+
+| Field | Value |
+|-------|-------|
+| Server | `localhost` |
+| Database | `qversity` |
+
+4. Select **DirectQuery** or **Import** mode
+5. Navigate to the **`gold`** schema and import the analytics tables
+6. Build your dashboards on top of the Gold layer
+
+> **Note:** PowerBI requires the **Npgsql PostgreSQL driver** to connect. Download it from https://github.com/npgsql/npgsql/releases if prompted.
+
+---
+
+## 🧹 Stopping and Resetting
+
+### Stop all containers (keep data)
+
+```bash
+docker compose down
+```
+
+### Stop and remove all data volumes (full reset)
+
+```bash
+docker compose down -v
+```
+
+> Using `-v` will **delete the PostgreSQL database volume**. You will need to re-run the DAG to reload data.
+
+### View container logs
+
+```bash
+# All services
+docker compose logs -f
+
+# Only Airflow
 docker compose logs -f airflow
 
-# List DAGs
-docker compose exec airflow airflow dags list
-
-# Trigger DAG
-docker compose exec airflow airflow dags trigger qversity_fintech_pipeline
-
-# Check DAG run status
-docker compose exec airflow airflow dags list-runs -d qversity_fintech_pipeline
+# Only PostgreSQL
+docker compose logs -f postgres
 ```
 
-### PySpark
-```bash
-# Test PySpark interactively
-docker compose exec airflow python -c "from pyspark.sql import SparkSession; print('PySpark OK')"
-```
 
-### dbt
-```bash
-# Enter dbt container
-docker compose exec dbt bash
+All runtime dependencies are pre-installed inside the Docker images. For reference:
 
-# Run all models
-dbt run
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `apache-airflow` | 2.7.3 | Pipeline orchestration |
+| `apache-airflow-providers-postgres` | 5.6.0 | Airflow → PostgreSQL operator |
+| `pyspark` | 3.5.0 | Array flattening & deduplication |
+| `dbt-core` | 1.7.0 | SQL-based transformations & testing |
+| `dbt-postgres` | 1.7.0 | dbt adapter for PostgreSQL |
+| `psycopg2-binary` | 2.9.7 | Python → PostgreSQL connector |
+| `boto3` | 1.28.0 | AWS S3 download |
+| `pandas` | 2.0.3 | Data manipulation |
+| `python-dotenv` | 1.0.0 | `.env` file loading |
 
-# Run specific layer
-dbt run --models bronze
-dbt run --models silver
-dbt run --models gold
+---
+# Bronze
 
-# Test data quality
-dbt test
+what i did
 
-# List models
-dbt ls --resource-type model
-```
-
-### Database Access
-```bash
-# Connect to PostgreSQL
-docker compose exec postgres psql -U qversity-admin -d qversity
-
-# View schemas
-\dn
-
-# View tables in a schema
-\dt bronze.*
-\dt silver.*
-\dt gold.*
-
-# Describe a table
-\d <schema>.<table_name>
-```
-
-## Data Source
-
-The dataset is a JSON file from an S3 public bucket:
-
-- **URL**: `https://qversity-raw-public-data.s3.amazonaws.com/fintech_banking_dataset.json`
-- **Records**: ~5,000 customers with nested accounts, transactions, loans, credit info, and digital engagement data
-- **Countries**: CO, UY, AR, MX, CL, PE, BR
-
-See the **Technical Project Guide** for full dataset documentation.
-
-## Git Tags (Milestones)
-
-Submit your work incrementally:
-
-```bash
-git tag -a v0.1.0-bronze -m "Bronze layer complete"
-git tag -a v0.2.0-silver -m "Silver layer complete"
-git tag -a v0.3.0-gold -m "Gold layer complete"
-git tag -a v0.4.0-powerbi -m "PowerBI dashboard complete"
-git tag -a v1.0.0 -m "Final submission"
-```
-
-## Cleanup
-
-```bash
-# Stop services
-docker compose down
-
-# Remove volumes (deletes all data)
-docker compose down -v
-
-# Remove images
-docker compose down -v --rmi local
-```
-
-## Participant
-
-- **Name**: [Your Full Name]
-- **Email**: [your.email@example.com]
-- **City**: [Your City]
-- **Cohort**: Qversity 2026
+1. **Security**: By using `postgres_conn_id`, sensitive database credentials are kept out of the source code and managed securely within Airflow's encrypted metadata store.
+2. **Resource Management**: It automates connection lifecycles, opening and closing the database session safely to prevent connection leaks without requiring boilerplate code.
+3. **Atomicity**: The `.run()` method wraps the DDL script in a single transaction. If any schema or table creation fails, it triggers an automatic rollback, preventing partial or corrupted configurations.

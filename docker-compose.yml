@@ -1,70 +1,85 @@
-version: '3.8'
 
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-qversity-admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qversity-admin}
-      POSTGRES_DB: ${POSTGRES_DB:-qversity}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U qversity-admin -d qversity"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  services:
+    postgres:
+      image: postgres:15
+      environment:
+        POSTGRES_USER: ${POSTGRES_USER:-qversity-admin}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qversity-admin}
+        POSTGRES_DB: ${POSTGRES_DB:-qversity}
+      volumes:
+        - postgres_data:/var/lib/postgresql/data
+      ports:
+        - "5432:5432"
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U qversity-admin -d qversity"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
 
-  airflow:
-    image: apache/airflow:2.7.3-python3.11
-    restart: on-failure
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-qversity-admin}:${POSTGRES_PASSWORD:-qversity-admin}@postgres/${POSTGRES_DB:-qversity}
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      _PIP_ADDITIONAL_REQUIREMENTS: >-
-        dbt-core
-        dbt-postgres
-        pandas
-        boto3
-        pyspark==3.5.0
-        psycopg2-binary
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./spark:/opt/airflow/spark
-      - ./logs:/opt/airflow/logs
-      - ./data:/opt/airflow/data
-      - ./dbt:/opt/airflow/dbt
-    ports:
-      - "8080:8080"
-    command: >
-      bash -c "
-      airflow db init &&
-      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com &&
-      airflow webserver & airflow scheduler
-      "
 
-  dbt:
-    image: python:3.11
-    volumes:
-      - ./dbt:/dbt
-      - ./data:/data
-    working_dir: /dbt
-    command: >
-      bash -c "
-      pip install dbt-core dbt-postgres &&
-      sleep infinity
-      "
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DBT_PROFILES_DIR: /dbt
+    airflow:
+      build:
+        context: .
+        dockerfile: Dockerfile.airflow
+      restart: on-failure
+      user: root
+      depends_on:
+        postgres:
+          condition: service_healthy
+      environment:
+        # Airflow metadata database
+        AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-qversity-admin}:${POSTGRES_PASSWORD:-qversity-admin}@postgres/${POSTGRES_DB:-qversity}
+        AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql+psycopg2://${POSTGRES_USER:-qversity-admin}:${POSTGRES_PASSWORD:-qversity-admin}@postgres/${POSTGRES_DB:-qversity}
+        AIRFLOW__CORE__EXECUTOR: LocalExecutor
+        AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+        # PostgreSQL connection details (used by Python + PySpark tasks)
+        POSTGRES_HOST: postgres
+        POSTGRES_PORT: "5432"
+        POSTGRES_DB: ${POSTGRES_DB:-qversity}
+        POSTGRES_USER: ${POSTGRES_USER:-qversity-admin}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qversity-admin}
+        # JDBC jar path (pre-downloaded in Dockerfile.airflow)
+        SPARK_JDBC_JAR: /opt/airflow/jars/postgresql-42.7.3.jar
+        # Java home (set in Dockerfile but repeated here for safety)
+        JAVA_HOME: /usr/lib/jvm/default-java
+      volumes:
+        - ./dags:/opt/airflow/dags
+        - ./spark:/opt/airflow/spark
+        - ./logs:/opt/airflow/logs
+        - ./data:/opt/airflow/data
+        - ./dbt:/opt/airflow/dbt
+      ports:
+        - "8080:8080"
+      command: >
+        bash -c "
+        mkdir -p /opt/airflow/logs/scheduler /opt/airflow/logs/dag_processor_manager &&
+        chown -R airflow:root /opt/airflow/logs &&
+        chmod -R 775 /opt/airflow/logs &&
+        gosu airflow bash -c '
+          airflow db init &&
+          airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true &&
+          airflow webserver & airflow scheduler
+        '
+        "
 
-volumes:
-  postgres_data:
+
+
+    dbt:
+      image: python:3.11
+      volumes:
+        - ./dbt:/dbt
+        - ./data:/data
+      working_dir: /dbt
+      command: >
+        bash -c "
+        pip install dbt-core dbt-postgres &&
+        sleep infinity
+        "
+      depends_on:
+        postgres:
+          condition: service_healthy
+      environment:
+        DBT_PROFILES_DIR: /dbt
+
+  volumes:
+    postgres_data:
