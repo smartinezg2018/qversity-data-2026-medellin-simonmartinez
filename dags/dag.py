@@ -8,6 +8,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
+import json
 
 default_args = {
     "owner": "qversity",
@@ -71,3 +72,36 @@ download_task = PythonOperator(
     dag=dag,
 )
 
+# ---------------------------------------------------------------
+# Task 2: Load JSON records into bronze.raw_fintech_data
+# ---------------------------------------------------------------
+
+def load_to_bronze():
+    LOCAL_PATH = 'data/raw/fintech_banking_dataset.json'
+    with open(LOCAL_PATH, "r") as f:
+        records = json.load(f)
+
+    hook = PostgresHook(postgres_conn_id="postgres_default")
+
+    # Reset table (idempotent) then bulk-insert
+    hook.run("TRUNCATE TABLE bronze.raw_fintech_data;")
+
+    now = datetime.now()
+    rows = [(json.dumps(record), now) for record in records]
+    hook.insert_rows(
+        table='bronze.raw_fintech_data',
+        rows=rows,
+        target_fields=['data', 'load_timestamp']
+    )
+    print(f"Successfully loaded {len(rows)} records into bronze.raw_fintech_data.")
+
+load_task = PythonOperator(
+    task_id='load_file_to_postgre',
+    python_callable=load_to_bronze,
+    dag=dag,
+)
+
+
+# --------bronze------------------------
+
+setup_task >> download_task >> load_task

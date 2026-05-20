@@ -89,27 +89,14 @@ Copy-Item env.example .env
 Open `.env` and review the variables:
 
 ```env
-# Docker Compose project name
-COMPOSE_PROJECT_NAME=qversity
-
-# Airflow
-AIRFLOW_UID=50000
-AIRFLOW_PROJ_DIR=.
-_AIRFLOW_WWW_USER_USERNAME=admin
-_AIRFLOW_WWW_USER_PASSWORD=admin
-
-# PostgreSQL
+# PostgreSQL Configuration
 POSTGRES_USER=qversity-admin
 POSTGRES_PASSWORD=qversity-admin
 POSTGRES_DB=qversity
 
-# dbt
-DBT_PROFILES_DIR=/dbt
-DBT_PROJECT_DIR=/dbt
-
-# S3 Data Source (public bucket — no credentials needed)
-S3_BUCKET=qversity-raw-public-data
-S3_KEY=fintech_banking_dataset.json
+# Airflow Admin UI Configuration (Optional, but good practice to externalize)
+AIRFLOW_ADMIN_USER=admin
+AIRFLOW_ADMIN_PASSWORD=admin
 ```
 
 > **Never commit `.env` to Git.** It is already listed in `.gitignore`.  
