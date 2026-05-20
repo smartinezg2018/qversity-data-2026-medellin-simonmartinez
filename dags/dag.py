@@ -5,12 +5,9 @@ from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
-def hello_qversity():
-    print("Hello from Qversity v2!")
-    print("This is a placeholder DAG.")
-    print("Replace this with your actual pipeline logic.")
-    return "Pipeline started"
-
+import boto3
+from botocore import UNSIGNED
+from botocore.config import Config
 
 default_args = {
     "owner": "qversity",
@@ -59,9 +56,18 @@ setup_task = PythonOperator(
 # ---------------------------------------------------------------
 # Task 1: Placeholder - Download JSON from S3 and load to Bronze
 # ---------------------------------------------------------------
-hello_task = PythonOperator(
-    task_id="hello_qversity",
-    python_callable=hello_qversity,
+
+def download_from_s3():
+    s3 = boto3.client('s3', config=Config(signature_version=UNSIGNED))
+    s3.download_file(
+        Bucket='qversity-raw-public-data',
+        Key='fintech_banking_dataset.json',
+        Filename='data/raw/fintech_banking_dataset.json'
+    )
+
+download_task = PythonOperator(
+    task_id='download_file_from_s3',
+    python_callable=download_from_s3,
     dag=dag,
 )
 
