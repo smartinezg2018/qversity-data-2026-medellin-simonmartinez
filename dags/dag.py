@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
-
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 def hello_qversity():
     print("Hello from Qversity v2!")
@@ -32,6 +32,31 @@ dag = DAG(
 )
 
 # ---------------------------------------------------------------
+# Task 0: Setup — Create schemas and base table (idempotent DDL)
+# ---------------------------------------------------------------
+
+def setup_schemas():
+    hook = PostgresHook(postgres_conn_id="postgres_default")
+    hook.run("""
+        CREATE SCHEMA IF NOT EXISTS bronze;
+        CREATE SCHEMA IF NOT EXISTS silver;
+        CREATE SCHEMA IF NOT EXISTS gold;
+
+        CREATE TABLE IF NOT EXISTS bronze.raw_fintech_data (
+            id             SERIAL PRIMARY KEY,
+            data           JSONB NOT NULL,
+            load_timestamp TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    print("Schemas and base tables ready.")
+
+setup_task = PythonOperator(
+    task_id='setup_schemas',
+    python_callable=setup_schemas,
+    dag=dag,
+)
+
+# ---------------------------------------------------------------
 # Task 1: Placeholder - Download JSON from S3 and load to Bronze
 # ---------------------------------------------------------------
 hello_task = PythonOperator(
@@ -40,33 +65,3 @@ hello_task = PythonOperator(
     dag=dag,
 )
 
-# ---------------------------------------------------------------
-# Task 2: Placeholder - PySpark tasks
-# Replace with your actual PySpark scripts
-# ---------------------------------------------------------------
-spark_placeholder = BashOperator(
-    task_id="spark_placeholder",
-    bash_command='echo "PySpark tasks go here"',
-    dag=dag,
-)
-
-# ---------------------------------------------------------------
-# Task 3: Placeholder - dbt run (Silver + Gold models)
-# ---------------------------------------------------------------
-dbt_placeholder = BashOperator(
-    task_id="dbt_placeholder",
-    bash_command='echo "dbt run goes here"',
-    dag=dag,
-)
-
-# ---------------------------------------------------------------
-# Task 4: Placeholder - dbt test
-# ---------------------------------------------------------------
-dbt_test_placeholder = BashOperator(
-    task_id="dbt_test_placeholder",
-    bash_command='echo "dbt test goes here"',
-    dag=dag,
-)
-
-# Task dependencies: Bronze -> PySpark -> dbt run -> dbt test
-hello_task >> spark_placeholder >> dbt_placeholder >> dbt_test_placeholder
