@@ -112,7 +112,7 @@ docker compose up -d --build
 
 This command will:
 1. Build the **Airflow** image (installs Java, PySpark, dbt, and the PostgreSQL JDBC driver)
-2. Pull the **PostgreSQL 15** image
+2. Pull the **PostgreSQL** image
 3. Start all containers in detached mode
 
 > The first build may take **5–10 minutes** due to dependency installation.
@@ -136,21 +136,8 @@ If PostgreSQL is not yet healthy, wait 30 seconds and run `docker compose ps` ag
 
 ---
 
-### 4. Access the Airflow Web UI
 
-Once the containers are running, open your browser and navigate to:
-
-```
-http://localhost:8080
-```
-
-Login with:
-- **Username:** `admin`
-- **Password:** `admin`
-
----
-
-### 5. Configure the PostgreSQL Connection in Airflow
+### 4. Configure the PostgreSQL Connection in Airflow
 
 Before triggering the DAG, set up the Airflow → PostgreSQL connection:
 
@@ -172,7 +159,7 @@ Before triggering the DAG, set up the Airflow → PostgreSQL connection:
 
 ---
 
-### 6. Activate and Run the Airflow DAG
+### 5. Activate and Run the Airflow DAG
 
 #### Option A — From the Console (recommended)
 
@@ -180,10 +167,9 @@ All Airflow CLI commands run inside the `airflow` container via `docker compose 
 
 ```bash
 # 1. Activate (unpause) the DAG
-docker compose exec airflow gosu airflow airflow dags unpause qversity_fintech_pipeline
-
+docker compose exec -u airflow airflow airflow dags unpause qversity_fintech_pipeline
 # 2. Trigger the DAG
-docker compose exec airflow gosu airflow airflow dags trigger qversity_fintech_pipeline
+docker compose exec -u airflow airflow airflow dags trigger qversity_fintech_pipeline
 ```
 
 #### Monitoring from the console
@@ -209,13 +195,13 @@ docker compose exec airflow gosu airflow airflow tasks logs qversity_fintech_pip
 1. Open **http://localhost:8080** and log in (`admin` / `admin`)
 2. Find the DAG named **`qversity_fintech_pipeline`**
 3. Toggle it **ON** (enable it)
-4. Click the ▶ **Trigger DAG** button to run it manually
+4. Click the **Trigger DAG** button to run it manually
 5. Monitor task progress in the **Graph View** or **Grid View**
 
 
 ---
 
-### 7. Connect PowerBI to PostgreSQL
+### 6. Connect PowerBI to PostgreSQL
 
 1. Open **PowerBI Desktop**
 2. Click **Get Data → PostgreSQL database**
@@ -234,7 +220,7 @@ docker compose exec airflow gosu airflow airflow tasks logs qversity_fintech_pip
 
 ---
 
-## 🧹 Stopping and Resetting
+##  Stopping and Resetting
 
 ### Stop all containers (keep data)
 
@@ -279,9 +265,9 @@ All runtime dependencies are pre-installed inside the Docker images. For referen
 | `python-dotenv` | 1.0.0 | `.env` file loading |
 
 ---
-# Bronze
+# Technical Decisions
+## Bronze
 
-## Technical Decisions
 
 ### JSONB as the Storage Format in Bronze
 
