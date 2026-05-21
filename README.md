@@ -299,3 +299,6 @@ The table was designed to be as simple and flexible as possible, since the Bronz
 | `id` | `SERIAL PRIMARY KEY` | Auto-incremented surrogate key. Uniquely identifies each ingested record without relying on any field from the source data. |
 | `data` | `JSONB NOT NULL` | The raw JSON record exactly as it came from the source file. JSONB allows direct querying of nested fields in later exploration stages. |
 | `load_timestamp` | `TIMESTAMP DEFAULT NOW()` | The exact moment the record was inserted. Useful for auditing and debugging ingestion runs. |
+
+
+## silver
