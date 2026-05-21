@@ -281,8 +281,35 @@ All runtime dependencies are pre-installed inside the Docker images. For referen
 ---
 # Bronze
 
-what i did
+## Technical Decisions
 
-1. **Security**: By using `postgres_conn_id`, sensitive database credentials are kept out of the source code and managed securely within Airflow's encrypted metadata store.
-2. **Resource Management**: It automates connection lifecycles, opening and closing the database session safely to prevent connection leaks without requiring boilerplate code.
-3. **Atomicity**: The `.run()` method wraps the DDL script in a single transaction. If any schema or table creation fails, it triggers an automatic rollback, preventing partial or corrupted configurations.
+### JSONB as the Storage Format in Bronze
+
+Since the dataset is a JSON file with variable structure, storing each record as `JSONB` in PostgreSQL was the most pragmatic choice. It preserves the full fidelity of the original data and allows exploratory queries directly on the raw layer without requiring a rigid schema upfront. Normalization happens in later layers (Silver/Gold), not here.
+
+### S3 Download with Unsigned (Public) Access
+
+The bucket is publicly accessible, so `signature_version=UNSIGNED` was set on the boto3 client. This avoids the need to manage AWS credentials for a source that doesn't require them, keeping both the local environment and the Airflow production setup simple.
+
+
+### One PythonOperator per Task
+
+Each pipeline step is encapsulated in its own `PythonOperator`. This follows the single-responsibility principle within Airflow: downloading, loading to Bronze, and setting up schemas are separate concerns that can fail, be retried, and be monitored independently.
+
+### PostgresHook for Schema Management and Data Loading
+
+Rather than managing raw `psycopg2` connections manually, **PostgresHook** was used throughout the pipeline. Since the project runs on Airflow, `PostgresHook` is the natural fit: it reads the connection details directly from the `postgres_default` connection configured in the Airflow UI, which means no credentials are hardcoded in the code and the same DAG works across local, staging, and production environments by simply changing the connection in Airflow.
+
+For schema setup, `hook.run()` handles the DDL statements in a single call with automatic connection lifecycle management — no need to manually open, commit, or close a connection. The `CREATE SCHEMA IF NOT EXISTS` and `CREATE TABLE IF NOT EXISTS` guards make this task safely re-runnable on every DAG execution without side effects.
+
+For data loading, `hook.insert_rows()` performs a bulk insert in a single operation rather than looping over individual `INSERT` statements, which is significantly more efficient for large datasets. Combined with the `TRUNCATE` at the start of the task, this gives the load step a clean, predictable behavior on every run.
+
+### Bronze Table Structure: `bronze.raw_fintech_data`
+
+The table was designed to be as simple and flexible as possible, since the Bronze layer's only responsibility is to store raw data without losing any information.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `SERIAL PRIMARY KEY` | Auto-incremented surrogate key. Uniquely identifies each ingested record without relying on any field from the source data. |
+| `data` | `JSONB NOT NULL` | The raw JSON record exactly as it came from the source file. JSONB allows direct querying of nested fields in later exploration stages. |
+| `load_timestamp` | `TIMESTAMP DEFAULT NOW()` | The exact moment the record was inserted. Useful for auditing and debugging ingestion runs. |
