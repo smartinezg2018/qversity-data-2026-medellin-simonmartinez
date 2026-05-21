@@ -100,7 +100,7 @@ load_task = PythonOperator(
     python_callable=load_to_bronze,
     dag=dag,
 )
-
+ 
 
 # --------bronze------------------------
 

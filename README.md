@@ -176,16 +176,16 @@ docker compose exec -u airflow airflow airflow dags trigger qversity_fintech_pip
 
 ```bash
 # Check overall DAG run status
-docker compose exec airflow gosu airflow airflow dags list-runs -d qversity_fintech_pipeline
+docker compose exec -u airflow airflow airflow dags list-runs -d qversity_fintech_pipeline
 
 # List all tasks in the DAG
-docker compose exec airflow gosu airflow airflow tasks list qversity_fintech_pipeline
+docker compose exec -u airflow airflow airflow tasks list qversity_fintech_pipeline
 
 # Check the state of a specific task in the latest run
-docker compose exec airflow gosu airflow airflow tasks states-for-dag-run qversity_fintech_pipeline <execution_date>
+docker compose exec -u airflow airflow airflow tasks states-for-dag-run qversity_fintech_pipeline <execution_date>
 
 # View logs for a specific task
-docker compose exec airflow gosu airflow airflow tasks logs qversity_fintech_pipeline setup_schemas <execution_date>
+docker compose exec -u airflow airflow airflow tasks logs qversity_fintech_pipeline setup_schemas <execution_date>
 ```
 
 > Replace `<execution_date>` with the run ID shown by `dags list-runs` (e.g. `manual__2026-05-20T22:00:00+00:00`).
