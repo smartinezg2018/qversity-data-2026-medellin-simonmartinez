@@ -39,6 +39,19 @@ models:
       - name: age_bucket
         tests:
           - not_null
+          - accepted_values:
+              values:
+                [
+                  'Unknown',
+                  'Under 18',
+                  '18-25',
+                  '26-35',
+                  '36-45',
+                  '46-55',
+                  '56-65',
+                  '66-75',
+                  '76+',
+                ]
       - name: gender
         tests:
           - accepted_values:
@@ -90,7 +103,7 @@ models:
               values: ['active', 'inactive', 'suspended', 'closed']
 
   - name: dim_credit_info
-    description: "Credit profile dimension (1:1 customer) with score and utilization buckets"
+    description: "Credit profile dimension (0..1 per customer) — only when staging credit_info JSON is present"
     columns:
       - name: customer_id
         tests:
@@ -137,7 +150,7 @@ models:
               quote: false
 
   - name: dim_digital_engagement
-    description: "Digital engagement dimension (1:1 customer) with last login date key"
+    description: "Digital engagement dimension (0..1 per customer) — only when staging digital_engagement JSON is present"
     columns:
       - name: customer_id
         tests:

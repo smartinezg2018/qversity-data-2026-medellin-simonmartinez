@@ -5,6 +5,8 @@ with base as (
         customer_id,
         digital_engagement::json as de
     from {{ source('silver', 'stg_customers') }}
+    where digital_engagement is not null
+      and trim(digital_engagement) not in ('', 'null', '{}')
 ),
 
 cleaned as (

@@ -1,3 +1,7 @@
+-- Grain: one row per customer_id from stg_customers (same as PySpark dedup).
+-- Cleansing may NULL individual attributes; columns without not_null in schema.yml
+-- (e.g. gender, phone_number, lat/lon) may stay NULL. not_null tests mark fields
+-- required for this dataset after rules — failures are data-quality debt, not imputation.
 -- depends_on: {{ ref('city_name_mapping') }}
 -- depends_on: {{ ref('country_name_mapping') }}
 -- depends_on: {{ ref('kyc_status_mapping') }}

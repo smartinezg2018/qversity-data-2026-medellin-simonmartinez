@@ -369,8 +369,8 @@ After Spark lands `silver.stg_*`, the Airflow DAG runs `dbt seed` (lookup CSVs i
 | Model | Source | Role |
 |-------|--------|------|
 | `dim_customer` | `stg_customers` | Customer profile: names, contact, geo, KYC, risk, segment, status |
-| `dim_credit_info` | `stg_customers` (`credit_info` JSON) | 1:1 credit profile per customer |
-| `dim_digital_engagement` | `stg_customers` (`digital_engagement` JSON) | 1:1 digital behavior per customer |
+| `dim_credit_info` | `stg_customers` (`credit_info` JSON) | Credit profile when nested object present (0..1 per customer) |
+| `dim_digital_engagement` | `stg_customers` (`digital_engagement` JSON) | Digital behavior when nested object present (0..1 per customer) |
 | `fct_account` | `stg_accounts` | Account balances and lifecycle |
 | `fct_transactions` | `stg_transactions` | Transaction events |
 | `fct_loans` | `stg_loans` | Loan portfolio snapshots |
@@ -636,15 +636,22 @@ Silver is modeled as a **star schema** so Gold and PowerBI can query facts with 
 
 **Why star, not snowflake?** The source JSON is already organized around a customer and nested products/events. Exploding `accounts[]`, `transactions[]`, and `loans[]` in PySpark maps naturally to fact tables at those grains. Keeping dimensions wide reduces join depth for the 24 business questions and matches how BI tools expect to slice metrics.
 
-**Light normalization on customer only:** `credit_info{}` and `digital_engagement{}` are separate 1:1 tables (`dim_credit_info`, `dim_digital_engagement`) keyed by `customer_id`, not merged into one very wide `dim_customer`. That mirrors the source structure, keeps credit and digital logic isolated, and avoids NULL-heavy columns for customers missing those objects. Facts still join to `dim_customer` first; credit and engagement are joined when needed— a small snowflake-style split, not a fully normalized snowflake warehouse.
+**Light normalization on customer only:** `credit_info{}` and `digital_engagement{}` are separate optional tables (`dim_credit_info`, `dim_digital_engagement`) keyed by `customer_id`, not merged into one very wide `dim_customer`. Models only include rows when staging JSON is non-empty. Facts still join to `dim_customer` first; credit and engagement are left-joined when needed—a small snowflake-style split, not a fully normalized snowflake warehouse.
 
 **Assumption for downstream layers:** Gold models treat `silver` as the semantic layer—facts for metrics, `dim_customer` + `dim_date` for filters, optional joins to credit/engagement dimensions for risk and digital questions.
 
 ### Data quality and null handling
 
 - **Invalid values become `NULL`, not imputed defaults.** Dates that do not match a known pattern, numbers outside allowed ranges, and strings that match sentinel placeholders are set to `NULL`. We do not backfill missing demographics, balances, or scores with averages or modes.
-- **Rows can be dropped only upstream of dbt.** PySpark removes exploded array rows with null business keys (`account_id`, `loan_id`, `transaction_id`). dbt keeps every customer row present in `stg_customers`; customers without `credit_info` or `digital_engagement` in JSON still appear in `dim_customer` but may have no matching row in `dim_credit_info` or `dim_digital_engagement` unless the nested object exists.
-- **Strict `not_null` tests in `schema.yml` define the analytics-ready subset.** Columns marked `not_null` (for example `email`, `registration_date`, `balance`) are required for a row to pass dbt tests. A failure means the cleansing rule left a gap for that record, not that the pipeline should invent a value.
+- **Row drops upstream of dbt.** PySpark removes exploded array rows with null business keys (`account_id`, `loan_id`, `transaction_id`). dbt does not drop customers from `dim_customer`.
+- **`dim_customer` grain vs nullable columns.** One row per `customer_id` from `stg_customers`. Macros may leave optional attributes `NULL` (for example `gender`, `phone_number`, `lat`/`lon`, `city`, `address`). Columns with `not_null` in `schema.yml` must be present after cleansing for the pipeline to pass—they encode minimum quality for this project’s source file, not silent defaults. A failing `not_null` test means cleansing produced a gap; fix the source, seeds, or rules rather than imputing values.
+- **`dim_credit_info` / `dim_digital_engagement` grain.** Only customers with a non-empty `credit_info` or `digital_engagement` JSON payload in staging (`WHERE` excludes null, empty, `{}`, and literal `'null'` strings). Join these dimensions when needed; left join from `dim_customer` is expected when a nested object was missing in the raw record.
+
+**`dim_customer` — required vs optional columns (after cleansing):**
+
+| Required (`not_null` in tests) | Optional (may be `NULL`) |
+|-------------------------------|---------------------------|
+| `customer_id`, `first_name`, `last_name`, `email`, `date_of_birth`, `age`, `age_bucket`, `nationality`, `country`, `registration_date`, `registration_date_key`, `tenure`, `kyc_status`, `risk_score`, `risk_tier`, `customer_segment`, `status` | `gender`, `phone_number`, `city`, `address`, `lat`, `lon`, `relationship_manager`, `is_email_valid` |
 
 ### Sentinels and invalid text
 
@@ -721,7 +728,10 @@ Buckets apply **after** cleansing. A `NULL` input yields bucket **`Unknown`** wh
 | 36–45 | 36-45 |
 | 46–55 | 46-55 |
 | 56–65 | 56-65 |
-| 66 and above | 76+ |
+| 66–75 | 66-75 |
+| 76 and above | 76+ |
+
+`age_bucket` is enforced in `schema.yml` via `accepted_values` on these labels.
 
 **Risk tier (`risk_tier`) from clamped `risk_score`:**
 
@@ -758,7 +768,7 @@ Buckets apply **after** cleansing. A `NULL` input yields bucket **`Unknown`** wh
 
 - **PySpark dedup:** Within each staging table, one row per business key (`customer_id`, `account_id`, `loan_id`, `transaction_id`). Ties break on highest Bronze `id` (last inserted row for that key in the current batch).
 - **Staging reload:** All four `silver.stg_*` tables are **fully overwritten** each DAG run; there is no incremental merge.
-- **Silver grain:** One row per customer in `dim_customer`; one row per customer in `dim_credit_info` and `dim_digital_engagement` when the nested JSON object exists; one row per account / transaction / loan in the fact tables. `dim_date` is one row per distinct calendar date observed in Silver.
+- **Silver grain:** One row per customer in `dim_customer`; at most one row per customer in `dim_credit_info` and `dim_digital_engagement` when the nested JSON object exists in staging; one row per account / transaction / loan in the fact tables. `dim_date` is one row per distinct calendar date observed in Silver.
 
 ### Fields intentionally left raw
 
