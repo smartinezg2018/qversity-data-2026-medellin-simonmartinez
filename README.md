@@ -559,3 +559,159 @@ Some staging fields are passed through intentionally or pending further EDA:
 | `fct_transactions` | `currency`, `channel` | `channel` tested via `accepted_values` only |
 | `fct_loans` | `loan_id`, `customer_id` | Keys only in `cleaned` CTE |
 | `dim_digital_engagement` | `preferred_channel` | Raw JSON text; not `safe_string` |
+
+## Assumptions
+
+The Silver layer applies the rules below. They come from EDA on `fintech_banking_dataset.json` and are implemented in `dbt/macros/` and `dbt/models/silver/`.
+
+### Dimensional model: star schema
+
+Silver is modeled as a **star schema** so Gold and PowerBI can query facts with simple joins and a stable grain.
+
+![Silver layer entity-relationship diagram](docs/images/silver-erd.png)
+
+*dbt Silver schema: four dimensions (`dim_customer`, `dim_credit_info`, `dim_digital_engagement`, `dim_date`) and three facts (`fct_account`, `fct_transactions`, `fct_loans`). Role-playing date keys join to `dim_date`.*
+
+- **Facts** (`fct_account`, `fct_transactions`, `fct_loans`) sit at the center—one row per account, transaction, or loan. They carry measures (balances, amounts, principal, rates) and foreign keys to dimensions.
+- **Dimensions** hold descriptive attributes. `dim_customer` is the main customer hub; `dim_date` is a conformed calendar (`date_key` = `YYYYMMDD`) reused across registration, account, transaction, loan, and login dates.
+- **Denormalized attributes** stay on dimensions where possible (country, segment, risk tier, age bucket) instead of chaining extra dimension tables (no `dim_country` → `dim_city` hierarchy).
+
+**Why star, not snowflake?** The source JSON is already organized around a customer and nested products/events. Exploding `accounts[]`, `transactions[]`, and `loans[]` in PySpark maps naturally to fact tables at those grains. Keeping dimensions wide reduces join depth for the 24 business questions and matches how BI tools expect to slice metrics.
+
+**Light normalization on customer only:** `credit_info{}` and `digital_engagement{}` are separate 1:1 tables (`dim_credit_info`, `dim_digital_engagement`) keyed by `customer_id`, not merged into one very wide `dim_customer`. That mirrors the source structure, keeps credit and digital logic isolated, and avoids NULL-heavy columns for customers missing those objects. Facts still join to `dim_customer` first; credit and engagement are joined when needed— a small snowflake-style split, not a fully normalized snowflake warehouse.
+
+**Assumption for downstream layers:** Gold models treat `silver` as the semantic layer—facts for metrics, `dim_customer` + `dim_date` for filters, optional joins to credit/engagement dimensions for risk and digital questions.
+
+### Data quality and null handling
+
+- **Invalid values become `NULL`, not imputed defaults.** Dates that do not match a known pattern, numbers outside allowed ranges, and strings that match sentinel placeholders are set to `NULL`. We do not backfill missing demographics, balances, or scores with averages or modes.
+- **Rows can be dropped only upstream of dbt.** PySpark removes exploded array rows with null business keys (`account_id`, `loan_id`, `transaction_id`). dbt keeps every customer row present in `stg_customers`; customers without `credit_info` or `digital_engagement` in JSON still appear in `dim_customer` but may have no matching row in `dim_credit_info` or `dim_digital_engagement` unless the nested object exists.
+- **Strict `not_null` tests in `schema.yml` define the analytics-ready subset.** Columns marked `not_null` (for example `email`, `registration_date`, `balance`) are required for a row to pass dbt tests. A failure means the cleansing rule left a gap for that record, not that the pipeline should invent a value.
+
+### Sentinels and invalid text
+
+`safe_string` (and macros that call it first, such as `proper_case` and `clean_phone`) treat the following trimmed values as **`NULL`**:
+
+`''`, `N/A`, `NA`, `null`, `nan` (case-sensitive on the literal `null` / `nan` strings as stored in staging).
+
+Other free-text fields are trimmed and kept as-is when they are not sentinels. **Emails** are normalized with `clean_email` but **not dropped** when invalid; `is_email_valid` flags format issues for filtering in BI without losing the original string.
+
+**Phone numbers** must match E.164-style `+` followed by 10–15 digits after stripping spaces, dashes, and parentheses; otherwise they become `NULL`.
+
+### Dates and timestamps
+
+Staging stores all dates as text. `parse_date` accepts, in order:
+
+| Pattern | Example | Parsed as |
+|---------|---------|-------------|
+| `YYYY-MM-DD` | `2024-03-15` | ISO date |
+| `YYYYMMDD` | `20240315` | Compact date |
+| `MM-DD-YYYY` | `03-15-2024` | US date |
+| `DD/MM/YYYY` | `15/03/2024` | Day-first date |
+
+Any other format (including timestamps with time components not matching the above) becomes **`NULL`**. `date_key` is `NULL` when the parsed date is `NULL`. `dim_date` is built from the union of all non-null dates across Silver models; dates that fail parsing never appear in the conformed calendar.
+
+`age` and `tenure` use PostgreSQL `age(current_date, …)` and whole years only after a successful `parse_date`.
+
+### Numeric fields and ranges
+
+- **Parsing:** `safe_numeric`, `safe_numeric_int`, and `safe_numeric_signed` reject non-numeric strings and the same sentinels as text fields before casting.
+- **Clamping:** Out-of-range values are set to **`NULL`**, not capped to the boundary.
+
+| Field / macro | Allowed range | Notes |
+|---------------|---------------|--------|
+| `lat` | −90 to 90 | `clamp_numeric` |
+| `lon` | −180 to 180 | `clamp_numeric` |
+| `risk_score` | 0 to 100 | `clamp_numeric` |
+| `credit_score` | 350 to 850 | `clamp_numeric_int` (FICO-style band used in tests) |
+| `utilization_pct` | 0 to 100 | `clamp_numeric` |
+| `interest_rate` (accounts, loans) | 0 to 100 | Annual rate as stored in source |
+| Currency amounts | — | `clean_currency` strips `$` / `USD`, normalizes comma decimals; invalid money strings → `NULL` |
+
+Singular tests in `dbt/tests/` add cross-field rules (for example `total_used <= total_limit`, `start_date <= end_date`, non-negative balances where applicable).
+
+### Booleans
+
+`cast_to_boolean` maps common string tokens to PostgreSQL `boolean`:
+
+- **True:** `true`, `1`, `si`, `y`, `yes` (case-insensitive)
+- **False:** `false`, `0`, `no`, `n` (case-insensitive)
+- **Anything else:** `NULL`
+
+Schema `accepted_values` on boolean columns use `true` / `false` without quoting in YAML (`quote: false`), matching PostgreSQL boolean storage.
+
+### Category normalization (seeds)
+
+Lookup seeds under `dbt/seeds/` load into schema `raw`. `map_from_seed` matches `lower(trim(source))` to `normalized_value`.
+
+- **Mapped values** replace the raw code with the seed’s normalized label (for example KYC `verified` → `Verified`).
+- **Unmapped values** pass through as `trim(column_name)` so new or typo codes remain visible in the data rather than being silently dropped.
+- **Accepted-value tests** in `schema.yml` document the target vocabulary after mapping; unmapped source values that survive mapping may still fail those tests until the seed is updated.
+
+### Derived buckets and tiers
+
+Buckets apply **after** cleansing. A `NULL` input yields bucket **`Unknown`** where noted.
+
+**Age (`age_bucket`):**
+
+| Age (years) | Bucket |
+|-------------|--------|
+| under 18 | Under 18 |
+| 18–25 | 18-25 |
+| 26–35 | 26-35 |
+| 36–45 | 36-45 |
+| 46–55 | 46-55 |
+| 56–65 | 56-65 |
+| 66 and above | 76+ |
+
+**Risk tier (`risk_tier`) from clamped `risk_score`:**
+
+| Score | Tier |
+|-------|------|
+| 0–25 | Low |
+| 26–50 | Medium |
+| 51–75 | High |
+| above 75 | Critical |
+| `NULL` | Unknown |
+
+**Credit score bucket (`credit_score_bucket`) — standard FICO-style bands on clamped score:**
+
+| Score | Bucket |
+|-------|--------|
+| under 580 | Poor |
+| 580–669 | Fair |
+| 670–739 | Good |
+| 740–799 | Very Good |
+| 800 and above | Excellent |
+| `NULL` | Unknown |
+
+**Utilization bucket (`utilization_bucket`) on clamped `utilization_pct`:**
+
+| Utilization % | Bucket |
+|---------------|--------|
+| 0–30 | Low |
+| 31–50 | Moderate |
+| 51–75 | High |
+| above 75 | Very High |
+| `NULL` | Unknown |
+
+### Keys, deduplication, and grain
+
+- **PySpark dedup:** Within each staging table, one row per business key (`customer_id`, `account_id`, `loan_id`, `transaction_id`). Ties break on highest Bronze `id` (last inserted row for that key in the current batch).
+- **Staging reload:** All four `silver.stg_*` tables are **fully overwritten** each DAG run; there is no incremental merge.
+- **Silver grain:** One row per customer in `dim_customer`; one row per customer in `dim_credit_info` and `dim_digital_engagement` when the nested JSON object exists; one row per account / transaction / loan in the fact tables. `dim_date` is one row per distinct calendar date observed in Silver.
+
+### Fields intentionally left raw
+
+These columns are not run through category or string macros beyond what staging already provides:
+
+| Model | Columns | Rationale |
+|-------|---------|-----------|
+| `fct_account` | `currency`, `branch_code` | Stable codes; validated only where tests apply |
+| `fct_transactions` | `currency`, `channel` | `channel` constrained by `accepted_values` |
+| `dim_digital_engagement` | `preferred_channel` | Taken from JSON text as-is for channel preference analysis |
+| `dim_customer` | `customer_id` | Business key; uniqueness tested, not transformed |
+
+### Pipeline reload behavior
+
+Each DAG run **truncates and reloads Bronze**, then **rebuilds all Silver staging and dbt Silver tables**. `load_timestamp` on Bronze is batch metadata only and is not propagated to staging. Reproducibility assumes the same S3 JSON file (or the same local copy under `data/raw/`) and the same seed CSVs in `dbt/seeds/`.
