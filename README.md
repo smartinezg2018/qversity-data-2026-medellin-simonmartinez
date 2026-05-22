@@ -302,3 +302,14 @@ The table was designed to be as simple and flexible as possible, since the Bronz
 
 
 ## silver
+
+# defining schemas in pyspark
+Bronze stores each record as JSONB — semantically correct types in the file, but not guaranteed to be consistent at ingest time (numbers as strings, mixed formats, nulls, etc.).
+
+If PySpark used IntegerType, DoubleType, DateType, etc. at parse time, from_json would fail or null out values that don’t match strictly. 
+
+Typing fields as StringType during parsing ensures that 100% of the raw data passes through Spark without being discarded or set to null due to strict casting mismatches. The task of type casting and validation is deferred to dbt.
+
+# script file
+
+get_spark_session and get_jdbc_config exist for a simple reason: the transformation code shouldn't have to care where it's running or how to reach the database. Those two functions handle that — one spins up Spark in a way that fits cleanly inside the Docker/Airflow setup, the other keeps passwords and hostnames tucked away where they belong, out of the business logic. The result is that every staging write lands in the same PostgreSQL instance the raw data came from, with no configuration scattered across the codebase to keep in sync.
