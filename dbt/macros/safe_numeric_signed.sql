@@ -1,0 +1,10 @@
+{% macro safe_numeric_signed(column_expr) %}
+
+    case
+        when trim({{ column_expr }}) in ('', 'N/A', 'NA', 'null', 'nan')
+            then null
+        when trim({{ column_expr }}) ~ '^[+-]?\d+(\.\d+)?$'
+            then trim({{ column_expr }})::numeric
+        else null
+    end
+{% endmacro %}
