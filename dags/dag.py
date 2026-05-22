@@ -104,4 +104,15 @@ load_task = PythonOperator(
 
 # --------bronze------------------------
 
-setup_task >> download_task >> load_task
+# ---------------------------------------------------------------
+# Task 3: PySpark — Silver staging (flatten arrays, dedup, JDBC write)
+# Runs inside the Airflow container; spark/ is mounted at /opt/airflow/spark
+# ---------------------------------------------------------------
+run_spark_silver = BashOperator(
+    task_id="run_spark_silver",
+    bash_command="python /opt/airflow/spark/script.py",
+    dag=dag,
+)
+
+
+setup_task >> download_task >> load_task >> run_spark_silver
