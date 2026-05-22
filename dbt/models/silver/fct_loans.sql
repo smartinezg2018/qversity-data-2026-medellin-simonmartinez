@@ -1,5 +1,7 @@
 -- depends_on: {{ ref('loan_type_mapping') }}
 -- depends_on: {{ ref('loan_status_mapping') }}
+-- depends_on: {{ ref('country_to_currency') }}
+-- depends_on: {{ ref('currency_to_usd') }}
 {{ config(materialized='table') }}
 
 with base as (
@@ -23,14 +25,33 @@ cleaned as (
         {{ safe_numeric_int('days_past_due') }}                             as days_past_due,
         {{ safe_string('collateral_type') }}                                as collateral_type
     from base
+),
+
+loans_with_country as (
+    select
+        l.*,
+        c.country
+    from cleaned l
+    inner join {{ ref('dim_customer') }} c using (customer_id)
+),
+
+loans_with_currency as (
+    select
+        l.*,
+        cc.currency_code
+    from loans_with_country l
+    inner join {{ ref('country_to_currency') }} cc
+        on l.country = cc.country
 )
 
 select
     customer_id,
     loan_id,
     type,
-    principal,
-    outstanding_balance,
+    country,
+    currency_code,
+    {{ to_usd('principal', 'currency_code') }}                              as principal_usd,
+    {{ to_usd('outstanding_balance', 'currency_code') }}                    as outstanding_balance_usd,
     interest_rate,
     term_months,
     monthly_payment,
@@ -41,4 +62,4 @@ select
     status,
     days_past_due,
     collateral_type
-from cleaned
+from loans_with_currency

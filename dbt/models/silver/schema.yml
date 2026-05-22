@@ -52,7 +52,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['AR', 'BR', 'CL', 'CO', 'MX', 'PE', 'UY']
+              values: ['Argentina', 'Brazil', 'Chile', 'Colombia', 'Mexico', 'Peru', 'Uruguay']
       - name: registration_date
         tests:
           - not_null

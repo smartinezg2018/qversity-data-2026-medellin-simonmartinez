@@ -1,4 +1,5 @@
 -- depends_on: {{ ref('city_name_mapping') }}
+-- depends_on: {{ ref('country_name_mapping') }}
 -- depends_on: {{ ref('kyc_status_mapping') }}
 -- depends_on: {{ ref('customer_segment_mapping') }}
 -- depends_on: {{ ref('customer_status_mapping') }}
@@ -20,7 +21,7 @@ cleaned as (
         {{ safe_string('gender') }}                                         as gender,
         {{ safe_string('nationality') }}                                    as nationality,
         {{ map_from_seed('city', 'city_name_mapping') }}                    as city,
-        {{ safe_string('country') }}                                        as country,
+        {{ map_from_seed('country', 'country_name_mapping') }}              as country,
         {{ safe_string('address') }}                                        as address,
         {{ clamp_numeric('lat', -90, 90) }}                                 as lat,
         {{ clamp_numeric('lon', -180, 180) }}                               as lon,
