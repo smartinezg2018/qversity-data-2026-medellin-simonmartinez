@@ -1,0 +1,13 @@
+raw_value,normalized_value
+ACTIVE,Active
+CLOSED,Closed
+active,Active
+frozen,Frozen
+closed,Closed
+Frozen,Frozen
+Active,Active
+FROZEN,Frozen
+Closed,Closed
+activo,Active
+cerrado,Closed
+congelado,Frozen

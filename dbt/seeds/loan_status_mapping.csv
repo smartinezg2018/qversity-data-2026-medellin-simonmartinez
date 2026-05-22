@@ -1,0 +1,9 @@
+raw_value,normalized_value
+default,Default
+DELINQUENT,Delinquent
+current,Current
+delinquent,Delinquent
+paid_off,Paid Off
+CURRENT,Current
+DEFAULT,Default
+PAID_OFF,Paid Off

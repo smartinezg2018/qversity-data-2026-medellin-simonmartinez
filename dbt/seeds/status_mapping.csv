@@ -1,0 +1,9 @@
+raw_value,normalized_value
+pending,Pending
+PENDING,Pending
+completed,Completed
+COMPLETED,Completed
+reversed,Reversed
+REVERSED,Reversed
+failed,Failed
+FAILED,Failed

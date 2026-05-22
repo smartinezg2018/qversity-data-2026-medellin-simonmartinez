@@ -84,7 +84,6 @@ spark-warehouse/
 # Data files
 data/processed/
 data/temp/
-*.csv
 *.parquet
 *.json
 !data/raw/.gitkeep
