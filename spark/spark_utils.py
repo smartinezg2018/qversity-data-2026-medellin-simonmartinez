@@ -1,8 +1,9 @@
 import os
 import logging
 from pyspark.sql import SparkSession, DataFrame
-from schemas import final_schema
 from pyspark.sql.functions import from_json, col, row_number
+from pyspark.sql.window import Window
+from schemas import final_schema
 
 # Get logger for Spark staging utils
 logger = logging.getLogger("spark_staging.utils")
@@ -41,8 +42,7 @@ def get_jdbc_config() -> tuple:
     return jdbc_url, jdbc_props
 
 
-
-# Bronze reader
+# ── Bronze reader ─────────────────────────────────────────────────────────────
 
 def read_bronze(spark: SparkSession, jdbc_url: str, jdbc_props: dict) -> DataFrame:
     """Read bronze.raw_fintech_data and parse the JSONB column using partitioned JDBC reads."""
