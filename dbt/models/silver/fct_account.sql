@@ -1,4 +1,5 @@
 -- depends_on: {{ ref('account_status_mapping') }}
+-- depends_on: {{ ref('currency_to_usd') }}
 {{ config(materialized='table') }}
 
 with base as (
@@ -27,7 +28,9 @@ select
     account_type,
     currency,
     balance,
+    {{ to_usd('balance', 'currency') }}                                       as balance_usd,
     credit_limit,
+    {{ to_usd('credit_limit', 'currency') }}                                  as credit_limit_usd,
     interest_rate,
     opened_date,
     {{ date_key('opened_date') }}                                           as opened_date_key,

@@ -1,5 +1,6 @@
 -- depends_on: {{ ref('transaction_type_mapping') }}
 -- depends_on: {{ ref('status_mapping') }}
+-- depends_on: {{ ref('currency_exchange_rates') }}
 {{ config(materialized='table') }}
 
 with base as (

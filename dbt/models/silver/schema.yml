@@ -207,6 +207,10 @@ models:
       - name: balance
         tests:
           - not_null
+      - name: balance_usd
+        description: "Balance converted to USD using currency_to_usd seed"
+      - name: credit_limit_usd
+        description: "Credit limit converted to USD using currency_to_usd seed"
       - name: opened_date
         tests:
           - not_null
@@ -254,6 +258,10 @@ models:
               to: ref('dim_date')
               field: date_key
       - name: amount
+        tests:
+          - not_null
+      - name: amount_usd
+        description: "Transaction amount converted to USD using currency_to_usd seed"
         tests:
           - not_null
       - name: currency
