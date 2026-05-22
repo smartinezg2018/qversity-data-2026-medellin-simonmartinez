@@ -82,3 +82,32 @@ def read_bronze(spark: SparkSession, jdbc_url: str, jdbc_props: dict) -> DataFra
     parsed = raw_df.withColumn("parsed", from_json(col("data").cast("string"), final_schema))
     logger.info("Loaded and parsed raw records from Bronze.")
     return parsed
+
+
+# ── Dedup helper ──────────────────────────────────────────────────────────────
+
+def dedup(df: DataFrame, partition_by: list, order_by_col: str = "load_timestamp") -> DataFrame:
+    """
+    Keep one row per partition_by key, ordered by order_by_col descending.
+    Ensures idempotency by always keeping the latest ingested version.
+    """
+    w = Window.partitionBy(*partition_by).orderBy(col(order_by_col).desc())
+    return (
+        df.withColumn("_rn", row_number().over(w))
+          .filter(col("_rn") == 1)
+          .drop("_rn")
+    )
+
+
+# ── Silver writer ─────────────────────────────────────────────────────────────
+
+def write_silver(df: DataFrame, table_name: str, jdbc_url: str, jdbc_props: dict):
+    """Write a DataFrame to the silver schema, replacing the table each run."""
+    logger.info(f"Writing silver.{table_name} to database...")
+    df.write.jdbc(
+        url=jdbc_url,
+        table=f"silver.{table_name}",
+        mode="overwrite",
+        properties=jdbc_props,
+    )
+    logger.info(f"silver.{table_name} written successfully.")
