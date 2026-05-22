@@ -1,5 +1,18 @@
 # Qversity Technical Project 2026 — Fintech/Banking Data Pipeline
 
+## Quick run guide
+
+Run from the repo root. One command per step.
+| Step | Command |
+|------|---------|
+| 1. Env | `cp env.example .env` (Windows: `Copy-Item env.example .env`) |
+| 2. Start stack | `docker compose up -d --build` |
+| 3. Health | `docker compose ps` |
+| 4. Unpause DAG | `docker compose exec -u airflow airflow airflow dags unpause qversity_fintech_pipeline` |
+| 5. Run full pipeline | `docker compose exec -u airflow airflow airflow dags trigger qversity_fintech_pipeline` |
+| 6. DAG status | `docker compose exec -u airflow airflow airflow dags list-runs -d qversity_fintech_pipeline` |
+
+
 > **End-to-end ELT pipeline** for a fictional LATAM Fintech company using PySpark, Apache Airflow, dbt, PostgreSQL, and PowerBI, fully containerized with Docker.
 
 ---
