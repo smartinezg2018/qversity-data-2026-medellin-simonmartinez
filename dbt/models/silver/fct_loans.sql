@@ -40,7 +40,7 @@ loans_with_currency as (
         l.*,
         cc.currency_code
     from loans_with_country l
-    inner join {{ ref('country_to_currency') }} cc
+    left join {{ ref('country_to_currency') }} cc
         on l.country = cc.country
 )
 
@@ -50,7 +50,9 @@ select
     type,
     country,
     currency_code,
+    principal,
     {{ to_usd('principal', 'currency_code') }}                              as principal_usd,
+    outstanding_balance,
     {{ to_usd('outstanding_balance', 'currency_code') }}                    as outstanding_balance_usd,
     interest_rate,
     term_months,

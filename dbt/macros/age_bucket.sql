@@ -7,7 +7,7 @@
         when {{ age_column }} between 36 and 45 then '36-45'
         when {{ age_column }} between 46 and 55 then '46-55'
         when {{ age_column }} between 56 and 65 then '56-65'
-        when {{ age_column }} between 56 and 65 then '66-75'
+        when {{ age_column }} between 66 and 75 then '66-75'
         else '76+'
     end
 {% endmacro %}

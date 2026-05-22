@@ -475,13 +475,19 @@ At compile time, reads `raw.currency_to_usd` and emits a `CASE` (same pattern as
 | `fct_transactions` | `amount` | `amount_usd` | `currency` |
 | `fct_account` | `balance` | `balance_usd` | `currency` |
 | `fct_account` | `credit_limit` | `credit_limit_usd` | `currency` |
+| `fct_loans` | `principal` | `principal_usd` | `currency_code` (via customer country) |
+| `fct_loans` | `outstanding_balance` | `outstanding_balance_usd` | `currency_code` (via customer country) |
+
+**Seed: `country_to_currency.csv`** (loaded to `raw.country_to_currency`)
+
+Maps normalized customer **country** (full name from `country_name_mapping`) to an ISO `currency_code` used by `to_usd` on loans. `fct_loans` left-joins this seed so loan grain stays 1:1 with `stg_loans`; `currency_code` and `*_usd` are `NULL` when the country is unmapped.
 
 **When to use which column**
 
 - **Local amount + `currency`:** country-specific views, regulatory reporting, or matching source systems.
 - **`*_usd` columns:** portfolio-wide revenue, balance rollups, segment comparisons, and PowerBI measures that must not sum mixed currencies.
 
-`fct_loans` has no `currency` in the source JSON, so loan amounts are not converted in Silver.
+Loans have no `currency` in the source JSON; Silver derives `currency_code` from `dim_customer.country` and the `country_to_currency` seed, then applies the same `to_usd` macro as accounts and transactions.
 
 **`cast_to_boolean(column_name)`**
 
@@ -535,6 +541,7 @@ At compile time, loads `raw.<seed_name>` (dbt seeds) and emits a `CASE` mapping 
 | Silver model | Source column | Seed |
 |--------------|---------------|------|
 | `dim_customer` | `city` | `city_name_mapping` |
+| `dim_customer` | `country` | `country_name_mapping` |
 | `dim_customer` | `kyc_status` | `kyc_status_mapping` |
 | `dim_customer` | `customer_segment` | `customer_segment_mapping` |
 | `dim_customer` | `status` | `customer_status_mapping` |
@@ -543,7 +550,8 @@ At compile time, loads `raw.<seed_name>` (dbt seeds) and emits a `CASE` mapping 
 | `fct_loans` | `status` | `loan_status_mapping` |
 | `fct_transactions` | `type` | `transaction_type_mapping` |
 | `fct_transactions` | `status` | `status_mapping` |
-| `fct_account`, `fct_transactions` | *(via `to_usd`)* | `currency_to_usd` |
+| `fct_account`, `fct_transactions`, `fct_loans` | *(via `to_usd`)* | `currency_to_usd` |
+| `fct_loans` | *(country → currency)* | `country_to_currency` |
 
 #### Derived attributes and conformed keys
 
@@ -677,7 +685,7 @@ Any other format (including timestamps with time components not matching the abo
 | `utilization_pct` | 0 to 100 | `clamp_numeric` |
 | `interest_rate` (accounts, loans) | 0 to 100 | Annual rate as stored in source |
 | Currency amounts | — | `clean_currency` strips `$` / `USD`, normalizes comma decimals; invalid money strings → `NULL` |
-| USD equivalents | — | `to_usd` on facts with `currency`; rates from `currency_to_usd` seed (`amount_usd`, `balance_usd`, `credit_limit_usd`) |
+| USD equivalents | — | `to_usd` on facts; rates from `currency_to_usd` seed (`amount_usd`, `balance_usd`, `credit_limit_usd`, `principal_usd`, `outstanding_balance_usd`). Loans use `country_to_currency` + `dim_customer.country` for `currency_code`. |
 
 Singular tests in `dbt/tests/` add cross-field rules (for example `total_used <= total_limit`, `start_date <= end_date`, non-negative balances where applicable).
 

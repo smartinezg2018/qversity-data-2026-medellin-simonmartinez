@@ -301,12 +301,20 @@ models:
           - not_null
           - accepted_values:
               values: ['Auto', 'Business', 'Education', 'Mortgage', 'Personal']
+      - name: country
+        description: "Customer country from dim_customer (for loan currency lookup)"
+      - name: currency_code
+        description: "ISO currency from country_to_currency seed; null if country unmapped"
       - name: principal
         tests:
           - not_null
+      - name: principal_usd
+        description: "Principal converted to USD via currency_to_usd seed"
       - name: outstanding_balance
         tests:
           - not_null
+      - name: outstanding_balance_usd
+        description: "Outstanding balance converted to USD via currency_to_usd seed"
       - name: interest_rate
         tests:
           - not_null
