@@ -321,3 +321,11 @@ Staging is not meant to grow forever or merge row-by-row. Each Airflow run means
 Rows with the same business key (customer_id, account_id, loan_id, or transaction_id) count as duplicates. We keep the one with the latest load_timestamp and drop the rest.
 
 Bronze can hold the same ID more than once in the raw data. Staging needs one row per entity so dbt’s uniqueness tests and joins do not break.
+
+### credit_info and digital_engagement as JSON strings
+
+PySpark’s job in Silver is to flatten nested arrays into relational rows. `accounts[]`, `transactions[]`, and `loans[]` need `explode` so each child record gets its own row. `credit_info{}` and `digital_engagement{}` are different: they are single objects per customer, already at the same grain as `stg_customers`.
+
+Flattening those structs into many columns inside Spark would work, but it would push type casting, null handling, and category cleanup into the same step that only needs to deduplicate and land staging data. EDA showed mixed date formats, string sentinels like `'null'` and `'N/A'`, and numeric fields stored as text—exactly the kind of cleanup dbt is meant to own.
+
+In `script.py`, both objects are written with `to_json()` into `silver.stg_customers` as plain text columns. That keeps the full nested payload intact through JDBC without inventing a wide, strongly typed Spark schema for fields that still need validation. dbt reads those strings, parses them, and flattens them into proper relational columns with casts, accepted-value tests, and documented rules—same pattern as deferring strict types to dbt for the flat customer fields.
