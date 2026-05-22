@@ -30,7 +30,7 @@ BRONZE — PostgreSQL (schema: bronze)
 ├──────────► PySpark (inside Airflow container)
 │                └── Flatten arrays: accounts, transactions, loans
 │                └── Deduplicate records
-│                └── Write → silver.stg_accounts / stg_transactions / stg_loans
+│                └── Write → silver.stg_customers / stg_accounts / stg_transactions / stg_loans
 │
 ▼
 dbt (dbt-core + dbt-postgres)
@@ -185,7 +185,7 @@ docker compose exec -u airflow airflow airflow tasks list qversity_fintech_pipel
 docker compose exec -u airflow airflow airflow tasks states-for-dag-run qversity_fintech_pipeline <execution_date>
 
 # View logs for a specific task
-docker compose exec -u airflow airflow airflow tasks logs qversity_fintech_pipeline setup_schemas <execution_date>
+docker compose exec -u airflow airflow airflow tasks log qversity_fintech_pipeline setup_schemas <execution_date>
 ```
 
 > Replace `<execution_date>` with the run ID shown by `dags list-runs` (e.g. `manual__2026-05-20T22:00:00+00:00`).
@@ -278,9 +278,9 @@ Since the dataset is a JSON file with variable structure, storing each record as
 The bucket is publicly accessible, so `signature_version=UNSIGNED` was set on the boto3 client. This avoids the need to manage AWS credentials for a source that doesn't require them, keeping both the local environment and the Airflow production setup simple.
 
 
-### One PythonOperator per Task
+### One operator per task
 
-Each pipeline step is encapsulated in its own `PythonOperator`. This follows the single-responsibility principle within Airflow: downloading, loading to Bronze, and setting up schemas are separate concerns that can fail, be retried, and be monitored independently.
+Each pipeline step is encapsulated in its own operator: `PythonOperator` for schema setup, S3 download, and Bronze load; `BashOperator` for the PySpark Silver staging job (`run_spark_silver`). This follows the single-responsibility principle within Airflow—each concern can fail, be retried, and be monitored independently.
 
 ### PostgresHook for Schema Management and Data Loading
 
@@ -300,32 +300,51 @@ The table was designed to be as simple and flexible as possible, since the Bronz
 | `data` | `JSONB NOT NULL` | The raw JSON record exactly as it came from the source file. JSONB allows direct querying of nested fields in later exploration stages. |
 | `load_timestamp` | `TIMESTAMP DEFAULT NOW()` | The exact moment the record was inserted. Useful for auditing and debugging ingestion runs. |
 
-# Silver
-Defining schemas in PySpark
-Bronze stores each record as JSONB, which is correct—but ingest is not guaranteed to be consistent (numbers as strings, mixed formats, nulls, and so on). If PySpark used IntegerType, DoubleType, DateType, etc. at parse time, from_json would fail or null out values that do not match strictly.
+## Silver
 
-Typing fields as StringType during parsing ensures that all raw data passes through Spark without being discarded or set to null due to strict casting mismatches. Type casting and validation are deferred to dbt.
+PySpark runs inside the Airflow container (`run_spark_silver` task) and rebuilds the Silver staging layer from Bronze on every DAG run: flatten nested arrays, deduplicate by business keys, and write relational tables back to PostgreSQL via JDBC. Cleaning, typing, and analytics modeling stay in dbt.
 
-## Script file
-### get_spark_session and get_jdbc_config
-the transformation code should not have to care where it is running or how it reaches the database. One function spins up Spark in a way that fits cleanly inside the Docker/Airflow setup; the other keeps passwords and hostnames out of the business logic, where they belong.
+| File | Role |
+|------|------|
+| `spark/script.py` | Entry point: builds and writes all four `silver.stg_*` tables |
+| `spark/schemas.py` | `StructType` definitions for `from_json` when parsing Bronze JSONB |
+| `spark/spark_utils.py` | Spark session, JDBC config, Bronze read, dedup helper, JDBC overwrite writer |
 
-The result is that every staging write lands in the same PostgreSQL instance the raw data came from, with no configuration scattered across the codebase to keep in sync.
+### Defining schemas in PySpark
 
-### write_silver
-Each run fully overwrites silver.stg_customers, stg_accounts, stg_loans, and stg_transactions via JDBC.
+Bronze stores each record as JSONB, which is correct—but ingest is not guaranteed to be consistent (numbers as strings, mixed formats, nulls, and so on). If PySpark used `IntegerType`, `DoubleType`, `DateType`, etc. at parse time, `from_json` would fail or null out values that do not match strictly.
 
-Staging is not meant to grow forever or merge row-by-row. Each Airflow run means “rebuild silver staging from bronze.” Overwrite keeps that mental model simple: either the job finished and all four tables are fresh, or it failed and you fix and rerun—you are not debugging half-old, half-new staging data.
+In `schemas.py`, every parsed field—including nested structs and array elements—is typed as `StringType`. That keeps the full payload visible in Spark even when a value is malformed for its logical type. Type casting, date normalization, and category cleanup are deferred to dbt, where EDA-driven rules (mixed date formats, sentinels like `'null'` and `'N/A'`) can be applied and tested in one place.
 
-### dedup
-Rows with the same business key (customer_id, account_id, loan_id, or transaction_id) count as duplicates. We keep the one with the latest load_timestamp and drop the rest.
+### `get_spark_session` and `get_jdbc_config`
 
-Bronze can hold the same ID more than once in the raw data. Staging needs one row per entity so dbt’s uniqueness tests and joins do not break.
+The transformation code should not have to care where it is running or how it reaches the database. One function spins up Spark in local mode with the PostgreSQL JDBC driver on the classpath; the other reads host, database, and credentials from environment variables.
 
-### credit_info and digital_engagement as JSON strings
+The result is that every staging write lands in the same PostgreSQL instance the raw data came from, with no configuration scattered across the codebase to keep in sync. `read_bronze()` uses the same JDBC connection to pull `bronze.raw_fintech_data` in parallel partitions when the table is large enough, then parses the `data` column with `final_schema` from `schemas.py`.
 
-PySpark’s job in Silver is to flatten nested arrays into relational rows. `accounts[]`, `transactions[]`, and `loans[]` need `explode` so each child record gets its own row. `credit_info{}` and `digital_engagement{}` are different: they are single objects per customer, already at the same grain as `stg_customers`.
+### `write_silver`
 
-Flattening those structs into many columns inside Spark would work, but it would push type casting, null handling, and category cleanup into the same step that only needs to deduplicate and land staging data. EDA showed mixed date formats, string sentinels like `'null'` and `'N/A'`, and numeric fields stored as text—exactly the kind of cleanup dbt is meant to own.
+Each run fully overwrites the four staging tables below via JDBC (`mode="overwrite"`). Staging is not meant to grow forever or merge row-by-row. Each Airflow run means “rebuild Silver staging from Bronze.” Overwrite keeps that mental model simple: either the job finished and all tables are fresh, or it failed and you fix and rerun—you are not debugging half-old, half-new staging data.
 
-In `script.py`, both objects are written with `to_json()` into `silver.stg_customers` as plain text columns. That keeps the full nested payload intact through JDBC without inventing a wide, strongly typed Spark schema for fields that still need validation. dbt reads those strings, parses them, and flattens them into proper relational columns with casts, accepted-value tests, and documented rules—same pattern as deferring strict types to dbt for the flat customer fields.
+| Staging table | Source in JSON | PySpark transform | Dedup key |
+|---------------|----------------|-------------------|-----------|
+| `silver.stg_customers` | Flat customer fields + nested objects | One row per customer; objects kept as JSON strings (see below) | `customer_id` |
+| `silver.stg_accounts` | `accounts[]` | `explode(accounts)` | `account_id` |
+| `silver.stg_loans` | `loans[]` | `explode_outer(loans)`; drop rows where `loan_id` is null (customers with no loans) | `loan_id` |
+| `silver.stg_transactions` | `transactions[]` | `explode_outer(transactions)` | `transaction_id` |
+
+All staging tables include `load_timestamp` from Bronze so dedup and auditing stay tied to the ingestion run.
+
+### Dedup
+
+Rows with the same business key (`customer_id`, `account_id`, `loan_id`, or `transaction_id`) count as duplicates. We keep the one with the latest `load_timestamp` and drop the rest, using a window function in `spark_utils.dedup()`.
+
+Bronze can hold the same ID more than once in the raw data. Staging needs one row per entity so dbt’s uniqueness tests and joins do not break. The rule is intentionally simple: latest ingest wins, with no merge logic across partial runs because staging is fully rebuilt each time.
+
+### `credit_info` and `digital_engagement` as JSON strings
+
+PySpark’s job in Silver is to flatten nested **arrays** into relational rows. `accounts[]`, `transactions[]`, and `loans[]` need `explode` (or `explode_outer` when the array may be empty) so each child record gets its own row. `credit_info{}` and `digital_engagement{}` are different: they are single objects per customer, already at the same grain as `stg_customers`.
+
+Flattening those structs into many columns inside Spark would work, but it would push type casting, null handling, and category cleanup into the same step that only needs to deduplicate and land staging data. EDA showed mixed date formats (for example `20251102` vs `17/03/2026` on login dates), string sentinels, and numeric fields stored as text—exactly the kind of cleanup dbt is meant to own.
+
+In `script.py`, both objects are written with `to_json()` into `silver.stg_customers` as plain text columns. That keeps the full nested payload intact through JDBC without inventing a wide, strongly typed Spark schema for fields that still need validation. dbt reads those strings, parses them with JSON operators, and flattens them into proper relational columns with casts, accepted-value tests, and documented rules—the same pattern as deferring strict types to dbt for the flat customer fields.
