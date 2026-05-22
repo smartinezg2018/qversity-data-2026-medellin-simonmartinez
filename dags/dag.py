@@ -140,4 +140,10 @@ dbt_models = BashOperator(
     dag=dag,
 )
 
-setup_task  >> load_task >> run_spark_silver >> dbt_seed >> dbt_models
+dbt_test = BashOperator(
+    task_id="dbt_test",
+    bash_command=_dbt_exec("test --select silver"),
+    dag=dag,
+)
+
+setup_task >> load_task >> run_spark_silver >> dbt_seed >> dbt_models >> dbt_test

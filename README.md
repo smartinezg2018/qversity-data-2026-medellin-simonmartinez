@@ -348,3 +348,214 @@ PySpark’s job in Silver is to flatten nested **arrays** into relational rows. 
 Flattening those structs into many columns inside Spark would work, but it would push type casting, null handling, and category cleanup into the same step that only needs to deduplicate and land staging data. EDA showed mixed date formats (for example `20251102` vs `17/03/2026` on login dates), string sentinels, and numeric fields stored as text—exactly the kind of cleanup dbt is meant to own.
 
 In `script.py`, both objects are written with `to_json()` into `silver.stg_customers` as plain text columns. That keeps the full nested payload intact through JDBC without inventing a wide, strongly typed Spark schema for fields that still need validation. dbt reads those strings, parses them with JSON operators, and flattens them into proper relational columns with casts, accepted-value tests, and documented rules—the same pattern as deferring strict types to dbt for the flat customer fields.
+
+### dbt Silver models
+
+After Spark lands `silver.stg_*`, the Airflow DAG runs `dbt seed` (lookup CSVs into schema `raw`) and `dbt run --select silver`. Seven models materialize as tables in schema `silver`: four dimensions and three facts. Macros in `dbt/macros/` centralize the EDA-driven cleanup rules so models stay readable and tests in `schema.yml` can target stable output values.
+
+| Model | Source | Role |
+|-------|--------|------|
+| `dim_customer` | `stg_customers` | Customer profile: names, contact, geo, KYC, risk, segment, status |
+| `dim_credit_info` | `stg_customers` (`credit_info` JSON) | 1:1 credit profile per customer |
+| `dim_digital_engagement` | `stg_customers` (`digital_engagement` JSON) | 1:1 digital behavior per customer |
+| `fct_account` | `stg_accounts` | Account balances and lifecycle |
+| `fct_transactions` | `stg_transactions` | Transaction events |
+| `fct_loans` | `stg_loans` | Loan portfolio snapshots |
+| `dim_date` | Union of all parsed dates from the models above | Conformed date dimension (`date_key` = `YYYYMMDD`) |
+
+`dim_date` is built last in the DAG graph: it unions every non-null date from customer, account, transaction, loan, and engagement models, then applies `date_key`. Downstream models reference `dim_date` via `relationships` tests on `*_date_key` columns.
+
+### dbt macros
+
+Macros are Jinja SQL fragments invoked as `{{ macro_name('column') }}`. Lower-level helpers (`safe_numeric_*`) are composed inside higher-level macros (`clamp_numeric`, `clamp_numeric_int`) rather than called directly from every model.
+
+#### Primitive parsing and typing
+
+**`parse_date(column_expr)`**
+
+Staging still stores dates as text with mixed formats. This macro tries, in order: ISO `YYYY-MM-DD`, compact `YYYYMMDD`, US `MM-DD-YYYY`, and `DD/MM/YYYY`. Anything else becomes `NULL` so bad values do not break casts or `date_key`.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `date_of_birth`, `registration_date` |
+| `dim_digital_engagement` | `last_login_date` (from `de->>'last_login_date'`) |
+| `fct_account` | `opened_date` |
+| `fct_transactions` | `date` |
+| `fct_loans` | `start_date`, `end_date` |
+
+**`safe_string(column_expr)`**
+
+Trims whitespace and maps sentinels (`''`, `N/A`, `NA`, `null`, `nan`) to `NULL`. Used for categorical or free-text fields that should not carry placeholder strings into analytics.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `gender`, `nationality`, `country`, `address`, `relationship_manager` |
+| `fct_account` | `account_type` |
+| `fct_transactions` | `category`, `merchant`, `description` |
+| `fct_loans` | `collateral_type` |
+
+**`safe_numeric(column_expr)`**, **`safe_numeric_int(column_expr)`**, **`safe_numeric_signed(column_expr)`**
+
+Shared null/sentinel handling, then regex validation before cast. `safe_numeric` allows non-negative decimals; `safe_numeric_int` casts to integer (fractional strings still match the regex); `safe_numeric_signed` allows a leading sign and casts to `numeric`. These are building blocks—models usually call `clamp_*` or `clean_currency` instead.
+
+| Macro | Used directly in silver models |
+|-------|--------------------------------|
+| `safe_numeric` | `dim_digital_engagement` → `avg_monthly_logins` |
+| `safe_numeric_int` | `dim_credit_info` → account counts, ages, payments, inquiries; `fct_loans` → `term_months`, `days_past_due` |
+| `safe_numeric_signed` | Inside `clamp_numeric` only (not called from model SQL) |
+
+**`clamp_numeric(column_expr, min_val, max_val)`**
+
+Parses via `safe_numeric_signed`, keeps the value only if it lies in `[min_val, max_val]`, otherwise `NULL`. Prevents impossible coordinates or rates from entering facts/dims.
+
+| Silver model | Columns | Range |
+|--------------|---------|-------|
+| `dim_customer` | `lat`, `lon`, `risk_score` | −90..90, −180..180, 0..100 |
+| `dim_credit_info` | `utilization_pct` | 0..100 |
+| `fct_account` | `interest_rate` | 0..100 |
+| `fct_loans` | `interest_rate` | 0..100 |
+
+**`clamp_numeric_int(column_expr, min_val, max_val)`**
+
+Same pattern as `clamp_numeric`, but uses `safe_numeric_int` and integer bounds. Used where the business rule is a whole number in a fixed band.
+
+| Silver model | Columns | Range |
+|--------------|---------|-------|
+| `dim_credit_info` | `credit_score` | 350..850 |
+
+**`clean_currency(column_expr)`**
+
+Strips `$` and `USD`, normalizes comma decimals to dot, validates a numeric pattern (including scientific notation), then casts to `numeric`. Invalid money strings become `NULL`.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_credit_info` | `total_limit`, `total_used` |
+| `fct_account` | `balance`, `credit_limit` |
+| `fct_transactions` | `amount` |
+| `fct_loans` | `principal`, `outstanding_balance`, `monthly_payment` |
+
+**`cast_to_boolean(column_name)`**
+
+Maps common truthy/falsy string tokens (`true`/`1`/`yes`/`si`, etc.) to PostgreSQL `boolean`; unknown values → `NULL`. Schema tests expect boolean columns stored as `'true'`/`'false'` in accepted-value tests.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_credit_info` | `bankruptcy_flag` |
+| `dim_digital_engagement` | `mobile_app_registered`, `web_banking_registered`, `push_notifications`, `paperless_statements` |
+
+#### Name, contact, and email hygiene
+
+**`proper_case(column_expr)`**
+
+Nulls sentinels like `safe_string`, then `initcap(lower(...))` with collapsed whitespace. Standardizes person names without manual per-row fixes.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `first_name`, `last_name` |
+
+**`clean_email(column_expr)`**
+
+Lowercases, removes whitespace and `#`, collapses duplicate `@`, trims edge dots. Does not drop invalid emails—that is left to `is_valid_email` for a separate flag column.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `email` |
+
+**`clean_phone(column_expr)`**
+
+After sentinel nulling, keeps only values that match E.164-style `+` and 10–15 digits (spaces, dashes, and parentheses stripped for the check).
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `phone_number` |
+
+**`is_valid_email(column_expr)`**
+
+Runs on the **already cleaned** email. Returns `false` for null, internal spaces, bad `@` placement, or regex mismatch; otherwise `true`. Lets dashboards filter on validity without discarding the raw-ish cleaned string.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `is_email_valid` (from `email`) |
+
+#### Category normalization via seeds
+
+**`map_from_seed(column_name, seed_name)`**
+
+At compile time, loads `raw.<seed_name>` (dbt seeds) and emits a `CASE` mapping `lower(trim(source))` to `normalized_value`. Unmapped values pass through as `trim(column_name)` so new source codes are visible rather than silently dropped. Seeds are versioned CSVs under `dbt/seeds/` and loaded before models run.
+
+| Silver model | Source column | Seed |
+|--------------|---------------|------|
+| `dim_customer` | `city` | `city_name_mapping` |
+| `dim_customer` | `kyc_status` | `kyc_status_mapping` |
+| `dim_customer` | `customer_segment` | `customer_segment_mapping` |
+| `dim_customer` | `status` | `customer_status_mapping` |
+| `fct_account` | `status` | `account_status_mapping` |
+| `fct_loans` | `type` | `loan_type_mapping` |
+| `fct_loans` | `status` | `loan_status_mapping` |
+| `fct_transactions` | `type` | `transaction_type_mapping` |
+| `fct_transactions` | `status` | `status_mapping` |
+
+#### Derived attributes and conformed keys
+
+**`calculate_years(date_column)`**
+
+Uses PostgreSQL `age(current_date, date_column)` and extracts whole years. Applied only after `parse_date` so the input is a real `date`.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `age` (from `date_of_birth`), `tenure` (from `registration_date`) |
+
+**`age_bucket(age_column)`**
+
+Bands customer age for segmentation and `accepted_values` tests in `schema.yml`.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `age_bucket` (from `age`) |
+
+**`risk_tier(risk_score_column)`**
+
+Maps clamped `risk_score` to Low / Medium / High / Critical / Unknown.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_customer` | `risk_tier` (from `risk_score`) |
+
+**`credit_score_bucket(credit_score_column)`** and **`utilization_bucket(utilization_column)`**
+
+Standard FICO-style score bands and utilization tiers on top of clamped metrics in `dim_credit_info`.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_credit_info` | `credit_score_bucket`, `utilization_bucket` |
+
+**`date_key(date_column)`**
+
+Surrogate integer key `YYYYMMDD` for joining to `dim_date` without storing redundant calendar attributes on every fact/dimension row.
+
+| Silver model | Columns |
+|--------------|---------|
+| `dim_date` | `date_key` (from `full_date`) |
+| `dim_customer` | `registration_date_key` |
+| `dim_digital_engagement` | `last_login_date_key` |
+| `fct_account` | `opened_date_key` |
+| `fct_transactions` | `transaction_date_key` |
+| `fct_loans` | `start_date_key`, `end_date_key` |
+
+#### Project configuration (not used in model SQL)
+
+**`generate_schema_name(custom_schema_name, node)`**
+
+Overrides dbt’s default schema naming so `+schema: silver` in `dbt_project.yml` lands models in the `silver` schema instead of `<target_schema>_silver`. No silver model calls this macro directly; it applies to every dbt node at build time.
+
+#### Columns without a dedicated macro
+
+Some staging fields are passed through intentionally or pending further EDA:
+
+| Silver model | Column | Notes |
+|--------------|--------|-------|
+| `dim_customer` | `customer_id` | Business key from staging; uniqueness enforced in tests |
+| `fct_account` | `currency`, `branch_code` | No cleaning macro |
+| `fct_transactions` | `currency`, `channel` | `channel` tested via `accepted_values` only |
+| `fct_loans` | `loan_id`, `customer_id` | Keys only in `cleaned` CTE |
+| `dim_digital_engagement` | `preferred_channel` | Raw JSON text; not `safe_string` |
