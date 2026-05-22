@@ -300,16 +300,24 @@ The table was designed to be as simple and flexible as possible, since the Bronz
 | `data` | `JSONB NOT NULL` | The raw JSON record exactly as it came from the source file. JSONB allows direct querying of nested fields in later exploration stages. |
 | `load_timestamp` | `TIMESTAMP DEFAULT NOW()` | The exact moment the record was inserted. Useful for auditing and debugging ingestion runs. |
 
+# Silver
+Defining schemas in PySpark
+Bronze stores each record as JSONB, which is correct—but ingest is not guaranteed to be consistent (numbers as strings, mixed formats, nulls, and so on). If PySpark used IntegerType, DoubleType, DateType, etc. at parse time, from_json would fail or null out values that do not match strictly.
 
-## silver
+Typing fields as StringType during parsing ensures that all raw data passes through Spark without being discarded or set to null due to strict casting mismatches. Type casting and validation are deferred to dbt.
 
-# defining schemas in pyspark
-Bronze stores each record as JSONB — semantically correct types in the file, but not guaranteed to be consistent at ingest time (numbers as strings, mixed formats, nulls, etc.).
+## Script file
+### get_spark_session and get_jdbc_config
+the transformation code should not have to care where it is running or how it reaches the database. One function spins up Spark in a way that fits cleanly inside the Docker/Airflow setup; the other keeps passwords and hostnames out of the business logic, where they belong.
 
-If PySpark used IntegerType, DoubleType, DateType, etc. at parse time, from_json would fail or null out values that don’t match strictly. 
+The result is that every staging write lands in the same PostgreSQL instance the raw data came from, with no configuration scattered across the codebase to keep in sync.
 
-Typing fields as StringType during parsing ensures that 100% of the raw data passes through Spark without being discarded or set to null due to strict casting mismatches. The task of type casting and validation is deferred to dbt.
+### write_silver
+Each run fully overwrites silver.stg_customers, stg_accounts, stg_loans, and stg_transactions via JDBC.
 
-# script file
+Staging is not meant to grow forever or merge row-by-row. Each Airflow run means “rebuild silver staging from bronze.” Overwrite keeps that mental model simple: either the job finished and all four tables are fresh, or it failed and you fix and rerun—you are not debugging half-old, half-new staging data.
 
-get_spark_session and get_jdbc_config exist for a simple reason: the transformation code shouldn't have to care where it's running or how to reach the database. Those two functions handle that — one spins up Spark in a way that fits cleanly inside the Docker/Airflow setup, the other keeps passwords and hostnames tucked away where they belong, out of the business logic. The result is that every staging write lands in the same PostgreSQL instance the raw data came from, with no configuration scattered across the codebase to keep in sync.
+### dedup
+Rows with the same business key (customer_id, account_id, loan_id, or transaction_id) count as duplicates. We keep the one with the latest load_timestamp and drop the rest.
+
+Bronze can hold the same ID more than once in the raw data. Staging needs one row per entity so dbt’s uniqueness tests and joins do not break.
