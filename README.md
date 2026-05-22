@@ -434,6 +434,42 @@ Strips `$` and `USD`, normalizes comma decimals to dot, validates a numeric patt
 | `fct_transactions` | `amount` |
 | `fct_loans` | `principal`, `outstanding_balance`, `monthly_payment` |
 
+#### Multi-currency normalization (USD)
+
+Transactions and accounts are stored in their **native currency** (`currency` on `fct_account` and `fct_transactions`). For cross-currency totals, averages, and Gold metrics, Silver adds parallel **USD** columns using fixed exchange rates from a dbt seed.
+
+**Seed: `currency_to_usd.csv`** (loaded to `raw.currency_to_usd`)
+
+| Column | Meaning |
+|--------|---------|
+| `currency_code` | ISO-style code (`USD`, `COP`, `MXN`, `EUR`, …) |
+| `usd_per_unit` | Multiplier applied to the **local** amount to obtain USD |
+
+Formula: **`amount_usd = local_amount × usd_per_unit`** (and the same for balances). Example: `COP` uses `0.00024`, so 1,000,000 COP → 240 USD.
+
+Rates are **static** for this project (not date-based FX). They are chosen so typical transaction medians align across currencies in the synthetic dataset. Update the CSV and re-run `dbt seed` if you add a new `currency` code.
+
+**Macro: `to_usd(amount_expr, currency_expr)`**
+
+At compile time, reads `raw.currency_to_usd` and emits a `CASE` (same pattern as `map_from_seed`). Rules:
+
+- If the local amount is `NULL`, the USD column is `NULL`.
+- If `currency` is unknown (not in the seed), the USD column is `NULL`.
+- Original `amount` / `balance` / `credit_limit` and `currency` are **unchanged** for audit and local-currency reporting.
+
+| Silver model | Local column | USD column | `currency` source |
+|--------------|--------------|------------|-------------------|
+| `fct_transactions` | `amount` | `amount_usd` | `currency` |
+| `fct_account` | `balance` | `balance_usd` | `currency` |
+| `fct_account` | `credit_limit` | `credit_limit_usd` | `currency` |
+
+**When to use which column**
+
+- **Local amount + `currency`:** country-specific views, regulatory reporting, or matching source systems.
+- **`*_usd` columns:** portfolio-wide revenue, balance rollups, segment comparisons, and PowerBI measures that must not sum mixed currencies.
+
+`fct_loans` has no `currency` in the source JSON, so loan amounts are not converted in Silver.
+
 **`cast_to_boolean(column_name)`**
 
 Maps common truthy/falsy string tokens (`true`/`1`/`yes`/`si`, etc.) to PostgreSQL `boolean`; unknown values → `NULL`. Schema tests expect boolean columns stored as `'true'`/`'false'` in accepted-value tests.
@@ -494,6 +530,7 @@ At compile time, loads `raw.<seed_name>` (dbt seeds) and emits a `CASE` mapping 
 | `fct_loans` | `status` | `loan_status_mapping` |
 | `fct_transactions` | `type` | `transaction_type_mapping` |
 | `fct_transactions` | `status` | `status_mapping` |
+| `fct_account`, `fct_transactions` | *(via `to_usd`)* | `currency_to_usd` |
 
 #### Derived attributes and conformed keys
 
@@ -555,8 +592,8 @@ Some staging fields are passed through intentionally or pending further EDA:
 | Silver model | Column | Notes |
 |--------------|--------|-------|
 | `dim_customer` | `customer_id` | Business key from staging; uniqueness enforced in tests |
-| `fct_account` | `currency`, `branch_code` | No cleaning macro |
-| `fct_transactions` | `currency`, `channel` | `channel` tested via `accepted_values` only |
+| `fct_account` | `currency`, `branch_code` | No cleaning macro on codes; `balance_usd` / `credit_limit_usd` from `to_usd` |
+| `fct_transactions` | `currency`, `channel` | `channel` tested via `accepted_values` only; `amount_usd` from `to_usd` |
 | `fct_loans` | `loan_id`, `customer_id` | Keys only in `cleaned` CTE |
 | `dim_digital_engagement` | `preferred_channel` | Raw JSON text; not `safe_string` |
 
@@ -627,6 +664,7 @@ Any other format (including timestamps with time components not matching the abo
 | `utilization_pct` | 0 to 100 | `clamp_numeric` |
 | `interest_rate` (accounts, loans) | 0 to 100 | Annual rate as stored in source |
 | Currency amounts | — | `clean_currency` strips `$` / `USD`, normalizes comma decimals; invalid money strings → `NULL` |
+| USD equivalents | — | `to_usd` on facts with `currency`; rates from `currency_to_usd` seed (`amount_usd`, `balance_usd`, `credit_limit_usd`) |
 
 Singular tests in `dbt/tests/` add cross-field rules (for example `total_used <= total_limit`, `start_date <= end_date`, non-negative balances where applicable).
 
@@ -707,8 +745,8 @@ These columns are not run through category or string macros beyond what staging 
 
 | Model | Columns | Rationale |
 |-------|---------|-----------|
-| `fct_account` | `currency`, `branch_code` | Stable codes; validated only where tests apply |
-| `fct_transactions` | `currency`, `channel` | `channel` constrained by `accepted_values` |
+| `fct_account` | `currency`, `branch_code` | Stable codes; `*_usd` columns for cross-currency analytics |
+| `fct_transactions` | `currency`, `channel` | `channel` constrained by `accepted_values`; use `amount_usd` for global totals |
 | `dim_digital_engagement` | `preferred_channel` | Taken from JSON text as-is for channel preference analysis |
 | `dim_customer` | `customer_id` | Business key; uniqueness tested, not transformed |
 
