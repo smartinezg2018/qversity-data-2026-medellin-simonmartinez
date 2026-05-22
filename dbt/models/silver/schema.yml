@@ -1,0 +1,336 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: "Conformed date dimension for role-playing date keys"
+    columns:
+      - name: date_key
+        description: "Surrogate key (YYYYMMDD integer)"
+        tests:
+          - unique
+          - not_null
+      - name: full_date
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_customer
+    description: "Customer dimension — cleans staging, adds age/risk buckets and registration date key"
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+      - name: first_name
+        tests:
+          - not_null
+      - name: last_name
+        tests:
+          - not_null
+      - name: email
+        tests:
+          - not_null
+      - name: date_of_birth
+        tests:
+          - not_null
+      - name: age
+        tests:
+          - not_null
+      - name: age_bucket
+        tests:
+          - not_null
+      - name: gender
+        tests:
+          - accepted_values:
+              values: ['M', 'F', 'Other']
+      - name: nationality
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['AR', 'BR', 'CL', 'CO', 'MX', 'PE', 'UY']
+      - name: country
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['AR', 'BR', 'CL', 'CO', 'MX', 'PE', 'UY']
+      - name: registration_date
+        tests:
+          - not_null
+      - name: registration_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: tenure
+        tests:
+          - not_null
+      - name: kyc_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Verified', 'Pending', 'Rejected', 'Expired']
+      - name: risk_score
+        tests:
+          - not_null
+      - name: risk_tier
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Low', 'Medium', 'High', 'Critical', 'Unknown']
+      - name: customer_segment
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['retail', 'premium', 'private_banking', 'sme']
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['active', 'inactive', 'suspended', 'closed']
+
+  - name: dim_credit_info
+    description: "Credit profile dimension (1:1 customer) with score and utilization buckets"
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: credit_score
+        description: "Credit score clamped to [350, 850]"
+      - name: credit_score_bucket
+        tests:
+          - accepted_values:
+              values: ['Poor', 'Fair', 'Good', 'Very Good', 'Excellent', 'Unknown']
+      - name: utilization_pct
+        description: "Credit utilization percentage clamped to [0, 100]"
+      - name: utilization_bucket
+        tests:
+          - accepted_values:
+              values: ['Low', 'Moderate', 'High', 'Very High', 'Unknown']
+      - name: total_limit
+        tests:
+          - not_null
+      - name: total_used
+        tests:
+          - not_null
+      - name: num_credit_accounts
+        tests:
+          - not_null
+      - name: oldest_account_age_months
+        tests:
+          - not_null
+      - name: late_payments_12m
+        tests:
+          - not_null
+      - name: inquiries_6m
+        tests:
+          - not_null
+      - name: bankruptcy_flag
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+
+  - name: dim_digital_engagement
+    description: "Digital engagement dimension (1:1 customer) with last login date key"
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: mobile_app_registered
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: web_banking_registered
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: last_login_date
+        tests:
+          - not_null
+      - name: last_login_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: push_notifications
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: paperless_statements
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: preferred_channel
+        tests:
+          - not_null
+
+  - name: fct_account
+    description: "Periodic account balance snapshot fact"
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: account_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['savings', 'checking', 'investment', 'credit_card']
+      - name: currency
+        tests:
+          - not_null
+      - name: balance
+        tests:
+          - not_null
+      - name: opened_date
+        tests:
+          - not_null
+      - name: opened_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Active', 'Closed', 'Frozen']
+      - name: branch_code
+        tests:
+          - not_null
+
+  - name: fct_transactions
+    description: "Transaction event fact"
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: account_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('fct_account')
+              field: account_id
+      - name: date
+        tests:
+          - not_null
+      - name: transaction_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: amount
+        tests:
+          - not_null
+      - name: currency
+        tests:
+          - not_null
+      - name: type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['payment', 'withdrawal', 'deposit', 'transfer', 'fee', 'refund']
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Pending', 'Completed', 'Reversed', 'Failed']
+      - name: channel
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['mobile', 'web', 'atm', 'branch', 'pos']
+
+  - name: fct_loans
+    description: "Loan portfolio snapshot fact"
+    columns:
+      - name: loan_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Auto', 'Business', 'Education', 'Mortgage', 'Personal']
+      - name: principal
+        tests:
+          - not_null
+      - name: outstanding_balance
+        tests:
+          - not_null
+      - name: interest_rate
+        tests:
+          - not_null
+      - name: term_months
+        tests:
+          - not_null
+      - name: monthly_payment
+        tests:
+          - not_null
+      - name: start_date
+        tests:
+          - not_null
+      - name: start_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: end_date
+        tests:
+          - not_null
+      - name: end_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Current', 'Default', 'Delinquent', 'Paid Off']
+      - name: days_past_due
+        tests:
+          - not_null

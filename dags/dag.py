@@ -66,11 +66,11 @@ def download_from_s3():
         Filename='data/raw/fintech_banking_dataset.json'
     )
 
-download_task = PythonOperator(
-    task_id='download_file_from_s3',
-    python_callable=download_from_s3,
-    dag=dag,
-)
+# download_task = PythonOperator(
+#     task_id='download_file_from_s3',
+#     python_callable=download_from_s3,
+#     dag=dag,
+# )
 
 # ---------------------------------------------------------------
 # Task 2: Load JSON records into bronze.raw_fintech_data
@@ -115,4 +115,29 @@ run_spark_silver = BashOperator(
 )
 
 
-setup_task >> download_task >> load_task >> run_spark_silver
+# dbt runs in the dedicated dbt container (qversity_dbt); Airflow uses docker exec
+# via the mounted Docker socket (/var/run/docker.sock).
+DBT_CONTAINER = "qversity_dbt"
+DBT_DIR = "/dbt"
+
+
+def _dbt_exec(subcommand: str) -> str:
+    return (
+        f"docker exec {DBT_CONTAINER} "
+        f"bash -c 'cd {DBT_DIR} && dbt {subcommand}'"
+    )
+
+
+dbt_seed = BashOperator(
+    task_id="dbt_seed",
+    bash_command=_dbt_exec("seed"),
+    dag=dag,
+)
+
+dbt_models = BashOperator(
+    task_id="dbt_models",
+    bash_command=_dbt_exec("run --select silver"),
+    dag=dag,
+)
+
+setup_task  >> load_task >> run_spark_silver >> dbt_seed >> dbt_models

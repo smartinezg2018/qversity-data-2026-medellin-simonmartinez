@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: silver                 
+    schema: silver               
+    tables:
+      - name: stg_customers     
+      - name: stg_transactions   
+      - name: stg_loans  
+      - name: stg_accounts

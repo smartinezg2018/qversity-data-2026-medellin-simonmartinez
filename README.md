@@ -111,7 +111,7 @@ docker compose up -d --build
 ```
 
 This command will:
-1. Build the **Airflow** image (installs Java, PySpark, dbt, and the PostgreSQL JDBC driver)
+1. Build the **Airflow** image (installs Java, PySpark, Docker CLI, and the PostgreSQL JDBC driver) and start the **dbt** service (dbt-core + dbt-postgres)
 2. Pull the **PostgreSQL** image
 3. Start all containers in detached mode
 

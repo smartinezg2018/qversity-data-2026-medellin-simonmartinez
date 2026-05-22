@@ -26,8 +26,9 @@ models:
     silver:
       +materialized: table
       +schema: silver
-    # Gold layer - business-ready analytics
+    # Gold layer - business-ready analytics (disabled until models ref Silver correctly)
     gold:
+      +enabled: false
       +materialized: table
       +schema: gold
 

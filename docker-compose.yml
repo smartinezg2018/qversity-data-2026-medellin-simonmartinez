@@ -21,8 +21,12 @@
         context: .
         dockerfile: Dockerfile.airflow
       restart: on-failure
+      group_add:
+        - "999"
       depends_on:
         postgres:
+          condition: service_healthy
+        dbt:
           condition: service_healthy
       environment:
         # Airflow metadata database
@@ -45,7 +49,6 @@
         - ./spark:/opt/airflow/spark
         - ./logs:/opt/airflow/logs
         - ./data:/opt/airflow/data
-        - ./dbt:/opt/airflow/dbt
         - /var/run/docker.sock:/var/run/docker.sock
       ports:
         - "8080:8080"
@@ -67,7 +70,7 @@
       working_dir: /dbt
       command: >
         bash -c "
-        pip install dbt-core dbt-postgres &&
+        pip install --no-cache-dir dbt-core==1.7.0 dbt-postgres==1.7.0 'protobuf>=4.0,<5' &&
         sleep infinity
         "
       depends_on:
@@ -75,6 +78,12 @@
           condition: service_healthy
       environment:
         DBT_PROFILES_DIR: /dbt
+      healthcheck:
+        test: ["CMD", "dbt", "--version"]
+        interval: 10s
+        timeout: 5s
+        retries: 12
+        start_period: 180s
 
   volumes:
     postgres_data:
