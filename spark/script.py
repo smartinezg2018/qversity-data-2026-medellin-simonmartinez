@@ -1,6 +1,6 @@
 import sys
 import logging
-from pyspark.sql.functions import col, explode, explode_outer, to_json
+from pyspark.sql.functions import col, explode_outer, to_json
 from spark_utils import get_spark_session, get_jdbc_config, read_bronze, dedup, write_silver
 
 # Configure standard logging to stream stdout
@@ -26,7 +26,7 @@ def main():
     # 2. Build and write stg_customers
     logger.info("Building stg_customers...")
     stg_customers_raw = parsed.select(
-        col("load_timestamp"),
+        col("id"),
         col("parsed.customer_id"),
         col("parsed.first_name"),
         col("parsed.last_name"),
@@ -50,17 +50,17 @@ def main():
         to_json(col("parsed.credit_info")).alias("credit_info"),
         to_json(col("parsed.digital_engagement")).alias("digital_engagement"),
     )
-    stg_customers = dedup(stg_customers_raw, partition_by=["customer_id"])
+    stg_customers = dedup(stg_customers_raw, partition_by=["customer_id"]).drop("id")
     write_silver(stg_customers, "stg_customers", jdbc_url, jdbc_props)
 
     # 3. Build and write stg_accounts
     logger.info("Building stg_accounts...")
     stg_accounts_raw = parsed.select(
-        col("load_timestamp"),
+        col("id"),
         col("parsed.customer_id"),
-        explode(col("parsed.accounts")).alias("account"),
+        explode_outer(col("parsed.accounts")).alias("account"),
     ).select(
-        col("load_timestamp"),
+        col("id"),
         col("customer_id"),
         col("account.account_id"),
         col("account.account_type"),
@@ -71,18 +71,20 @@ def main():
         col("account.opened_date"),
         col("account.status"),
         col("account.branch_code"),
+    ).filter(
+        col("account_id").isNotNull()
     )
-    stg_accounts = dedup(stg_accounts_raw, partition_by=["account_id"])
+    stg_accounts = dedup(stg_accounts_raw, partition_by=["account_id"]).drop("id")
     write_silver(stg_accounts, "stg_accounts", jdbc_url, jdbc_props)
 
     # 4. Build and write stg_loans
     logger.info("Building stg_loans...")
     stg_loans_raw = parsed.select(
-        col("load_timestamp"),
+        col("id"),
         col("parsed.customer_id"),
         explode_outer(col("parsed.loans")).alias("loan"),
     ).select(
-        col("load_timestamp"),
+        col("id"),
         col("customer_id"),
         col("loan.loan_id"),
         col("loan.type"),
@@ -97,20 +99,19 @@ def main():
         col("loan.days_past_due"),
         col("loan.collateral_type"),
     ).filter(
-        # Drop null rows from explode_outer for loan-free customers
         col("loan_id").isNotNull()
     )
-    stg_loans = dedup(stg_loans_raw, partition_by=["loan_id"])
+    stg_loans = dedup(stg_loans_raw, partition_by=["loan_id"]).drop("id")
     write_silver(stg_loans, "stg_loans", jdbc_url, jdbc_props)
 
     # 5. Build and write stg_transactions
     logger.info("Building stg_transactions...")
     stg_transactions_raw = parsed.select(
-        col("load_timestamp"),
+        col("id"),
         col("parsed.customer_id"),
         explode_outer(col("parsed.transactions")).alias("txn"),
     ).select(
-        col("load_timestamp"),
+        col("id"),
         col("customer_id"),
         col("txn.transaction_id"),
         col("txn.account_id"),
@@ -123,8 +124,10 @@ def main():
         col("txn.channel"),
         col("txn.status"),
         col("txn.description"),
+    ).filter(
+        col("transaction_id").isNotNull()
     )
-    stg_transactions = dedup(stg_transactions_raw, partition_by=["transaction_id"])
+    stg_transactions = dedup(stg_transactions_raw, partition_by=["transaction_id"]).drop("id")
     write_silver(stg_transactions, "stg_transactions", jdbc_url, jdbc_props)
 
     # Clean up

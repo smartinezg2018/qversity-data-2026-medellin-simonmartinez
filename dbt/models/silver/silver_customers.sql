@@ -12,6 +12,5 @@
 select
     customer_id,
     initcap(data->>'first_name') as first_name,
-    initcap(data->>'last_name') as last_name,
-    load_timestamp as processed_at
+    initcap(data->>'last_name') as last_name
 from {{ ref('bronze_raw_fintech') }}

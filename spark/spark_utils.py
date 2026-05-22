@@ -64,7 +64,7 @@ def read_bronze(spark: SparkSession, jdbc_url: str, jdbc_props: dict) -> DataFra
         logger.info(f"Reading bronze.raw_fintech_data in parallel (partitions={num_partitions}, bounds=[{min_id}, {max_id}])")
         raw_df = spark.read.jdbc(
             url=jdbc_url,
-            table="(SELECT id, data::text AS data, load_timestamp FROM bronze.raw_fintech_data) t",
+            table="(SELECT id, data::text AS data FROM bronze.raw_fintech_data) t",
             column="id",
             lowerBound=min_id,
             upperBound=max_id,
@@ -75,7 +75,7 @@ def read_bronze(spark: SparkSession, jdbc_url: str, jdbc_props: dict) -> DataFra
         logger.warning("Table is empty or bounds are invalid. Falling back to single-threaded read.")
         raw_df = spark.read.jdbc(
             url=jdbc_url,
-            table="(SELECT id, data::text AS data, load_timestamp FROM bronze.raw_fintech_data) t",
+            table="(SELECT id, data::text AS data FROM bronze.raw_fintech_data) t",
             properties=jdbc_props
         )
 
@@ -86,12 +86,20 @@ def read_bronze(spark: SparkSession, jdbc_url: str, jdbc_props: dict) -> DataFra
 
 # ── Dedup helper ──────────────────────────────────────────────────────────────
 
-def dedup(df: DataFrame, partition_by: list, order_by_col: str = "load_timestamp") -> DataFrame:
+def dedup(
+    df: DataFrame,
+    partition_by: list,
+    order_cols: list | None = None,
+) -> DataFrame:
     """
-    Keep one row per partition_by key, ordered by order_by_col descending.
-    Ensures idempotency by always keeping the latest ingested version.
+    Keep one row per partition_by key.
+    Tie-break with Bronze row id desc (id is only used during dedup and is not
+    written to Silver staging tables).
     """
-    w = Window.partitionBy(*partition_by).orderBy(col(order_by_col).desc())
+    if order_cols is None:
+        order_cols = ["id"]
+    order_expr = [col(c).desc() for c in order_cols]
+    w = Window.partitionBy(*partition_by).orderBy(*order_expr)
     return (
         df.withColumn("_rn", row_number().over(w))
           .filter(col("_rn") == 1)

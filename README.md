@@ -298,7 +298,7 @@ The table was designed to be as simple and flexible as possible, since the Bronz
 |---|---|---|
 | `id` | `SERIAL PRIMARY KEY` | Auto-incremented surrogate key. Uniquely identifies each ingested record without relying on any field from the source data. |
 | `data` | `JSONB NOT NULL` | The raw JSON record exactly as it came from the source file. JSONB allows direct querying of nested fields in later exploration stages. |
-| `load_timestamp` | `TIMESTAMP DEFAULT NOW()` | The exact moment the record was inserted. Useful for auditing and debugging ingestion runs. |
+| `load_timestamp` | `TIMESTAMP DEFAULT NOW()` | Batch ingest time for the DAG run (one value per full reload). Useful for auditing when Bronze was last loaded; not used in Silver dedup. |
 
 ## Silver
 
@@ -329,17 +329,17 @@ Each run fully overwrites the four staging tables below via JDBC (`mode="overwri
 | Staging table | Source in JSON | PySpark transform | Dedup key |
 |---------------|----------------|-------------------|-----------|
 | `silver.stg_customers` | Flat customer fields + nested objects | One row per customer; objects kept as JSON strings (see below) | `customer_id` |
-| `silver.stg_accounts` | `accounts[]` | `explode(accounts)` | `account_id` |
-| `silver.stg_loans` | `loans[]` | `explode_outer(loans)`; drop rows where `loan_id` is null (customers with no loans) | `loan_id` |
-| `silver.stg_transactions` | `transactions[]` | `explode_outer(transactions)` | `transaction_id` |
+| `silver.stg_accounts` | `accounts[]` | `explode_outer(accounts)`; drop rows where `account_id` is null | `account_id` |
+| `silver.stg_loans` | `loans[]` | `explode_outer(loans)`; drop rows where `loan_id` is null | `loan_id` |
+| `silver.stg_transactions` | `transactions[]` | `explode_outer(transactions)`; drop rows where `transaction_id` is null | `transaction_id` |
 
-All staging tables include `load_timestamp` from Bronze so dedup and auditing stay tied to the ingestion run.
+Dedup uses Bronze row `id` only inside Spark for tie-breaking, then drops it before writing—`id` is not a column in the staging tables. Silver staging does not carry `load_timestamp`; that column stays on Bronze as batch-level ingest metadata (one value per full reload).
 
 ### Dedup
 
-Rows with the same business key (`customer_id`, `account_id`, `loan_id`, or `transaction_id`) count as duplicates. We keep the one with the latest `load_timestamp` and drop the rest, using a window function in `spark_utils.dedup()`.
+Rows with the same business key (`customer_id`, `account_id`, `loan_id`, or `transaction_id`) count as duplicates within the current Bronze snapshot. We keep one row per key, choosing the row with the highest Bronze `id` (last inserted row for that key), using a window function in `spark_utils.dedup()`.
 
-Bronze can hold the same ID more than once in the raw data. Staging needs one row per entity so dbt’s uniqueness tests and joins do not break. The rule is intentionally simple: latest ingest wins, with no merge logic across partial runs because staging is fully rebuilt each time.
+Because each DAG run truncates and reloads Bronze with a single `load_timestamp` for the whole batch, timestamp does not discriminate between rows in the same run—only `id` does. Bronze can still hold the same business ID more than once in the raw file (or after `explode_outer`). Staging needs one row per entity so dbt’s uniqueness tests and joins do not break. Staging is fully rebuilt each run, so there is no merge logic across partial runs.
 
 ### `credit_info` and `digital_engagement` as JSON strings
 
