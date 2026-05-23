@@ -624,7 +624,7 @@ The Silver layer applies the rules below. They come from EDA on `fintech_banking
 
 ### Dimensional model: star schema
 
-Silver is modeled as a **star schema** so Gold and PowerBI can query facts with simple joins and a stable grain.
+Silver is modeled as a **star schema** so Gold can query facts with simple joins and a stable grain.
 
 ![Silver layer entity-relationship diagram](docs/images/silver-erd.png)
 
@@ -791,6 +791,39 @@ Each DAG run **truncates and reloads Bronze**, then **rebuilds all Silver stagin
 Gold models materialize to schema **`gold`** as analytics-ready tables built on Silver. Each model keeps an explicit grain so PowerBI (and SQL) can aggregate metrics without re-deriving business rules. The pipeline runs `dbt run --select gold` then `dbt test --select gold` after Silver tests pass.
 
 **Upstream assumption:** Gold reads only from cleansed Silver (`dim_*`, `fct_*`). Cross-currency metrics use **`amount_usd`**, **`balance_usd`**, and **`outstanding_balance_usd`** (fixed rates from `currency_to_usd` seed).
+
+### Schema design: what Gold is (star vs snowflake)
+
+Gold does **not** implement a classic dimensional model with separate fact and dimension tables in the same schema. It exposes **seven wide analytics tables** (`fct_*`) that behave as **subject-area data marts**: each answers a business domain at a fixed **grain**, with descriptive attributes already on the row.
+
+The `fct_` prefix marks **metric-oriented** tables, but there are **no `dim_*` tables in Gold** — attributes such as `country`, `customer_segment`, and `risk_tier` are **denormalized** into each mart rather than joined at query time from Gold dimensions.
+
+| Layer | Pattern |
+|-------|---------|
+| **Silver** | **Star schema** — `dim_customer`, `dim_date`, `fct_transactions`, etc. |
+| **Gold** | **Denormalized data marts** — wide tables for BI, built from the Silver star |
+
+#### Star or snowflake?
+
+**Neither a pure star nor a snowflake in Gold.** Silver holds the canonical dimensional model; Gold **flattens** it for consumption.
+
+**Why it is not snowflake:** In a snowflake, dimensions are normalized into hierarchies (for example `dim_city` → `dim_country` → `dim_region`). In Gold there are no separate dimension tables, no chains of dimension joins in schema `gold`, and attributes like `country` and `customer_segment` are **repeated** on each mart instead of referencing another Gold table.
+
+**Why it is not a pure star in Gold:** A typical star has one central fact and shared dimensions in the same layer. Gold has **multiple grains** (customer, account, transaction, loan, customer × channel), **collapses** Silver dimensions into each mart (for example `fct_loan_portfolio` carries `customer_segment` from a join to `dim_customer` at build time), and Power BI / SQL consume **one table per business question** rather than a fact hub plus many Gold dims.
+
+The closest label is a **flattened star / one-big-table (OBT) per domain**: dimensional logic lives in Silver; Gold is the **presentation layer**.
+
+#### Why this design
+
+1. **Twenty-four business questions** span distinct domains (profile, products, transactions, revenue, portfolio, risk, digital). A single central fact would force awkward joins and mixed grains; **one mart per theme** keeps filters and aggregations straightforward in Power BI.
+
+2. **BI performance and simplicity:** Fewer joins in reports and less risk of inflating metrics through wrong cardinality. Example: `fct_revenue` is already aggregated at `customer_id` × `channel` (revenue source: loan, credit card, fee).
+
+3. **Silver is already the semantic layer** (documented star schema above). Gold does not duplicate the full model — it reads only from Silver (`dim_*`, `fct_*`), applies business rules (revenue accrual, DPD buckets, flags), and **materializes** analysis-ready results.
+
+4. **Explicit grain** on every table avoids ambiguity (for example `fct_product_summary` at account grain with customer-level `loan_count`; `fct_revenue` at customer × revenue-source grain).
+
+5. **Stack fit:** PostgreSQL + Power BI on schema `gold`; wide tables match direct import and page-level dashboards per subject area.
 
 ### Gold models
 
