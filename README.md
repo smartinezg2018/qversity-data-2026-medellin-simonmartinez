@@ -784,3 +784,6 @@ These columns are not run through category or string macros beyond what staging 
 ### Pipeline reload behavior
 
 Each DAG run **truncates and reloads Bronze**, then **rebuilds all Silver staging and dbt Silver tables**. `load_timestamp` on Bronze is batch metadata only and is not propagated to staging. Reproducibility assumes the same S3 JSON file (or the same local copy under `data/raw/`) and the same seed CSVs in `dbt/seeds/`.
+
+
+# Gold layer

@@ -15,7 +15,7 @@ select
     l.collateral_type,
     l.start_date,
     l.end_date,
-    round((l.outstanding_balance_usd * l.interest_rate / 100), 2)  as annual_interest_income,
+    round((l.outstanding_balance_usd * (l.interest_rate / 100) / 12.0), 2) as monthly_interest_income,
     case
         when l.status in ('Delinquent', 'Default') then true
         else false
