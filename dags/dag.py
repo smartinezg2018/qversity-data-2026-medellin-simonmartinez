@@ -66,11 +66,11 @@ def download_from_s3():
         Filename='data/raw/fintech_banking_dataset.json'
     )
 
-# download_task = PythonOperator(
-#     task_id='download_file_from_s3',
-#     python_callable=download_from_s3,
-#     dag=dag,
-# )
+download_task = PythonOperator(
+    task_id='download_file_from_s3',
+    python_callable=download_from_s3,
+    dag=dag,
+)
 
 # ---------------------------------------------------------------
 # Task 2: Load JSON records into bronze.raw_fintech_data
@@ -152,5 +152,11 @@ dbt_gold_models = BashOperator(
     dag=dag,
 )
 
+dbt_gold_test = BashOperator(
+    task_id="dbt_gold_test",
+    bash_command=_dbt_exec("test --select gold"),
+    dag=dag,
+)
+
 # setup_task >> download_task >> load_task >> run_spark_silver >> dbt_seed >> dbt_models >> dbt_test
-setup_task >> load_task >> run_spark_silver >> dbt_seed >> dbt_silver_models >> dbt_silver_test >> dbt_gold_models
+setup_task >> download_task >>load_task >> run_spark_silver >> dbt_seed >> dbt_silver_models >> dbt_silver_test >> dbt_gold_models >> dbt_gold_test

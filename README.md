@@ -787,3 +787,54 @@ Each DAG run **truncates and reloads Bronze**, then **rebuilds all Silver stagin
 
 
 # Gold layer
+
+Gold models materialize to schema **`gold`** as analytics-ready tables built on Silver. Each model keeps an explicit grain so PowerBI (and SQL) can aggregate metrics without re-deriving business rules. The pipeline runs `dbt run --select gold` then `dbt test --select gold` after Silver tests pass.
+
+**Upstream assumption:** Gold reads only from cleansed Silver (`dim_*`, `fct_*`). Cross-currency metrics use **`amount_usd`**, **`balance_usd`**, and **`outstanding_balance_usd`** (fixed rates from `currency_to_usd` seed).
+
+### Gold models
+
+| Model | Grain | Role |
+|-------|-------|------|
+| `fct_customer_profile` | `customer_id` | Demographics, lifecycle, risk tier for customer-centric questions |
+| `fct_product_summary` | `account_id` | Account-level balances and product mix (accounts + loans per customer) |
+| `fct_transaction_patterns` | `transaction_id` | Transaction events with channel, category, failure flags, day of week |
+| `fct_revenue` | `customer_id` × `channel` | Revenue by source: loan interest, credit-card interest, completed fees |
+| `fct_loan_portfolio` | `loan_id` | Loan balances, delinquency, DPD buckets, monthly interest income |
+| `fct_credit_risk` | `customer_id` (credit profile only) | Credit scores, utilization, delinquency flag for risk analysis |
+| `fct_digital_engagement` | `customer_id` (digital profile only) | Channel preference and mobile adoption |
+
+Column-level tests live in `dbt/models/gold/schema.yml`; Gold-specific singular tests are under `dbt/tests/test_gold_*.sql`.
+
+### Revenue definition
+
+Revenue in this project is **banking income in USD** from three sources. All amounts are converted with the fixed `currency_to_usd` seed before Gold logic runs. Interest-based revenue uses a **simple monthly accrual** on outstanding balances (annual rate ÷ 12); fee revenue uses **actual completed transaction amounts**.
+
+#### Formulas
+
+| Revenue type | Silver source | Formula | Filters |
+|--------------|---------------|---------|---------|
+| **Loan interest** | `fct_loans` | `outstanding_balance_usd × (interest_rate ÷ 100) ÷ 12` | `outstanding_balance_usd` and `interest_rate` not null |
+| **Credit-card interest** | `fct_account` | `balance_usd × (interest_rate ÷ 100) ÷ 12` | `account_type = 'credit_card'`; `balance_usd` and `interest_rate` not null |
+| **Fees** | `fct_transactions` | `amount_usd` (full fee amount, no accrual) | `type = 'fee'` and `status = 'Completed'`; `amount_usd` not null |
+
+`interest_rate` is treated as an **annual percentage** (e.g. `6.5` means 6.5% per year). The ÷ 12 step yields an **estimated monthly interest income** per loan or credit-card account, not a cash receipt tied to a specific transaction date.
+
+**Example:** A loan with `outstanding_balance_usd = 10,000` and `interest_rate = 6` contributes  
+`10,000 × (6 / 100) / 12 = 50.00` USD per month to loan interest revenue.
+
+#### How `fct_revenue` is built
+
+1. **Union** three CTEs (`loan_revenue`, `credit_card_revenue`, `fee_revenue`), each with `customer_id`, a source label as **`channel`**, `revenue_amount`, and a **`source_id`** (`loan_id`, `account_id`, or `transaction_id`).
+2. **Join** `dim_customer` for **`customer_segment`** and **`country`**.
+3. **Aggregate** with `round(sum(revenue_amount), 2)` as **`total_revenue_usd`** and `count(*)` as **`transaction_count`**, grouped by customer, segment, country, and channel.
+
+Important distinction for **Q3**: In **`fct_revenue`**, **`channel`** means **revenue source** (`loan` | `credit_card` | `fee`), not the transaction origination channel on fee rows. For “revenue by mobile vs branch on fees”, use **`fct_transaction_patterns`** filtered to `type = 'fee'` and `status = 'Completed'`, then group by **`channel`**.
+
+#### What is excluded from revenue
+
+- Non-fee transaction types (payments, transfers, deposits, withdrawals, refunds) — movement of money, not income.
+- Fees that are not **`Completed`** (pending, failed, reversed).
+- Savings, checking, and investment accounts (no interest accrual in the current model).
+- Loan or credit-card rows missing balance or rate (excluded by `WHERE` clauses rather than imputed).
+

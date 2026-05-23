@@ -1,0 +1,308 @@
+version: 2
+
+models:
+  - name: fct_customer_profile
+    description: "Customer demographics and lifecycle attributes for segmentation dashboards"
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+      - name: country
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Argentina', 'Brazil', 'Chile', 'Colombia', 'Mexico', 'Peru', 'Uruguay']
+      - name: customer_segment
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['retail', 'premium', 'private_banking', 'sme']
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['active', 'inactive', 'suspended', 'closed']
+      - name: kyc_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Verified', 'Pending', 'Rejected', 'Expired']
+      - name: age
+        tests:
+          - not_null
+      - name: age_bucket
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                [
+                  'Unknown',
+                  'Under 18',
+                  '18-25',
+                  '26-35',
+                  '36-45',
+                  '46-55',
+                  '56-65',
+                  '66-75',
+                  '76+',
+                ]
+      - name: risk_score
+        tests:
+          - not_null
+      - name: risk_tier
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Low', 'Medium', 'High', 'Critical', 'Unknown']
+
+  - name: fct_credit_risk
+    description: "Credit profile with delinquency flag for risk and utilization analysis"
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: country
+        tests:
+          - not_null
+      - name: customer_segment
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['retail', 'premium', 'private_banking', 'sme']
+      - name: risk_tier
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Low', 'Medium', 'High', 'Critical', 'Unknown']
+      - name: credit_score_bucket
+        tests:
+          - accepted_values:
+              values: ['Poor', 'Fair', 'Good', 'Very Good', 'Excellent', 'Unknown']
+      - name: utilization_bucket
+        tests:
+          - accepted_values:
+              values: ['Low', 'Moderate', 'High', 'Very High', 'Unknown']
+      - name: bankruptcy_flag
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: has_delinquent_loan
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+
+  - name: fct_digital_engagement
+    description: "Digital channel adoption and preference by customer"
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: customer_segment
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['retail', 'premium', 'private_banking', 'sme']
+      - name: age_bucket
+        tests:
+          - not_null
+      - name: mobile_app_registered
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: web_banking_registered
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: preferred_channel
+        tests:
+          - not_null
+      - name: channel_preference
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['digital', 'branch/other']
+      - name: is_mobile_user
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+
+  - name: fct_loan_portfolio
+    description: "Loan-level portfolio metrics with delinquency and DPD buckets"
+    columns:
+      - name: loan_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: loan_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Auto', 'Business', 'Education', 'Mortgage', 'Personal']
+      - name: loan_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Current', 'Default', 'Delinquent', 'Paid Off']
+      - name: days_past_due
+        tests:
+          - not_null
+      - name: is_delinquent
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: dpd_bucket
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['current', '1-30 days', '31-60 days', '61-90 days', '90+ days']
+      - name: monthly_interest_income
+        tests:
+          - not_null
+
+  - name: fct_product_summary
+    description: "Account-level product mix with per-customer product counts"
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: country
+        tests:
+          - not_null
+      - name: customer_segment
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['retail', 'premium', 'private_banking', 'sme']
+      - name: account_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['savings', 'checking', 'investment', 'credit_card']
+      - name: account_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Active', 'Closed', 'Frozen']
+      - name: account_count
+        tests:
+          - not_null
+      - name: loan_count
+        tests:
+          - not_null
+      - name: total_product_count
+        tests:
+          - not_null
+
+  - name: fct_revenue
+    description: "Customer revenue by channel (loan interest, credit card interest, fees)"
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: channel
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['loan', 'credit_card', 'fee']
+      - name: total_revenue_usd
+        tests:
+          - not_null
+      - name: transaction_count
+        tests:
+          - not_null
+
+  - name: fct_transaction_patterns
+    description: "Transaction-level facts for volume, channel, and failure analysis"
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: account_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('fct_account')
+              field: account_id
+      - name: customer_segment
+        tests:
+          - not_null
+      - name: transaction_date
+        tests:
+          - not_null
+      - name: day_of_week_num
+        tests:
+          - not_null
+      - name: amount_usd
+        tests:
+          - not_null
+      - name: type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['payment', 'withdrawal', 'deposit', 'transfer', 'fee', 'refund']
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Pending', 'Completed', 'Reversed', 'Failed']
+      - name: channel
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['mobile', 'web', 'atm', 'branch', 'pos']
+      - name: is_failed
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
+      - name: is_transfer
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['true', 'false']
+              quote: false
