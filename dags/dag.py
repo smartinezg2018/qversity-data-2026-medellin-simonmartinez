@@ -142,7 +142,9 @@ dbt_silver_models = BashOperator(
 
 dbt_silver_test = BashOperator(
     task_id="dbt_silver_test",
-    bash_command=_dbt_exec("test --select silver"),
+    # Exclude gold: relationship tests on gold models reference silver refs and are
+    # pulled in by default indirect selection before gold tables exist.
+    bash_command=_dbt_exec("test --select silver --exclude gold"),
     dag=dag,
 )
 

@@ -214,26 +214,132 @@ docker compose exec -u airflow airflow airflow tasks log qversity_fintech_pipeli
 
 ---
 
-### 6. Connect PowerBI to PostgreSQL
+### 6. Connect Power BI
 
-1. Open **PowerBI Desktop**
-2. Click **Get Data → PostgreSQL database**
-3. Enter the connection details:
-
-| Field | Value |
-|-------|-------|
-| Server | `localhost` |
-| Database | `qversity` |
-
-4. Select **DirectQuery** or **Import** mode
-5. Navigate to the **`gold`** schema and import the analytics tables
-6. Build your dashboards on top of the Gold layer
-
-> **Note:** PowerBI requires the **Npgsql PostgreSQL driver** to connect. Download it from https://github.com/npgsql/npgsql/releases if prompted.
+Complete the pipeline (steps 1–5) so the **`gold`** schema is populated, then follow **[Power BI connection](#power-bi-connection)**.
 
 ---
 
-##  Stopping and Resetting
+## Power BI connection
+
+Power BI Desktop connects to the same PostgreSQL instance that Airflow and dbt use. Import only tables from schema **`gold`** — those tables are wide, denormalized marts built for dashboards (see [Gold layer](#gold-layer)).
+
+### Before you connect
+
+1. **Stack is running:** `docker compose ps` shows `postgres` as `healthy` on port `5432`.
+2. **Pipeline has finished:** The DAG `qversity_fintech_pipeline` completed successfully (Bronze → Silver → Gold). A fresh clone with no DAG run will have an empty `gold` schema.
+3. **Power BI Desktop** is installed ([download](https://powerbi.microsoft.com/desktop)).
+4. **Npgsql driver** (PostgreSQL connector for Power BI): if the connector is missing, install it when prompted or from [Npgsql releases](https://github.com/npgsql/npgsql/releases). Restart Power BI Desktop after installing the driver.
+
+Verify Gold tables exist (optional):
+
+```bash
+docker compose exec postgres psql -U qversity-admin -d qversity -c "\dt gold.*"
+```
+
+You should see seven tables: `fct_credit_risk`, `fct_customer_profile`, `fct_digital_engagement`, `fct_loan_portfolio`, `fct_product_summary`, `fct_revenue`, `fct_transaction_patterns`.
+
+### Connection settings
+
+Use the credentials from your `.env` file (defaults match `env.example`):
+
+| Setting | Value |
+|---------|--------|
+| **Connector** | PostgreSQL database |
+| **Server** | `localhost` (or `localhost:5432`) |
+| **Database** | `qversity` |
+| **Data connectivity mode** | **Import** (recommended for this project size) or DirectQuery |
+| **Username** | `qversity-admin` |
+| **Password** | `qversity-admin` |
+
+> Power BI runs on your **host machine**, not inside Docker. Use **`localhost`**, not `postgres` (that hostname only works between containers).
+
+### New connection (step by step)
+
+1. Open **Power BI Desktop**.
+2. **Home → Get data → More…** (or **Get data → Database → PostgreSQL database**).
+3. Enter **Server** `localhost` and **Database** `qversity`, then click **OK**.
+4. Choose **Database** authentication and enter the username and password from the table above.
+5. If asked about **encryption** or SSL, for local development you can use **Disable** / **Require SSL: Off** (no TLS on the default Docker Postgres setup).
+6. In **Navigator**, expand **qversity → gold** and select the Gold `fct_*` tables you need (select all seven for the full dashboard).
+7. Click **Load** (Import) or **Transform Data** if you need Power Query steps first.
+
+### Open the project report
+
+A starter report ships in the repo:
+
+```text
+powerbi/qversity.pbix
+```
+
+1. Double-click **`powerbi/qversity.pbix`** (or **File → Open** in Power BI Desktop).
+2. If prompted to **sign in** or **edit credentials**, use the same PostgreSQL settings as above.
+3. **Home → Refresh** (or **Transform data → Close & Apply**) after each pipeline run so visuals match the latest Gold data.
+
+If table names or columns changed in dbt, fix broken fields in **Model** view or update the `.pbix` and save.
+
+### Recommended Gold tables by dashboard theme
+
+The technical brief asks for a **4-page** dashboard. Map pages to Gold models as follows:
+
+| Dashboard page | Suggested Gold tables |
+|----------------|------------------------|
+| Executive overview | `fct_customer_profile`, `fct_product_summary` |
+| Revenue & transactions | `fct_revenue`, `fct_transaction_patterns` |
+| Risk & credit | `fct_credit_risk`, `fct_loan_portfolio` |
+| Customer & engagement | `fct_customer_profile`, `fct_digital_engagement` |
+
+Use **Import** mode unless you need live SQL on every interaction; Import keeps report performance predictable for workshop-sized datasets.
+
+### Model tips
+
+- **Do not** import `bronze` or `silver` for end-user dashboards unless you are debugging — metrics and business rules are defined in **Gold**.
+- Prefer **`amount_usd`**, **`balance_usd`**, **`outstanding_balance_usd`**, and **`total_revenue_usd`** for cross-country totals (see [Gold layer](#gold-layer)).
+- In **`fct_revenue`**, column **`channel`** is the **revenue source** (`loan`, `credit_card`, `fee`), not the transaction channel. For fee volume by mobile vs branch, use **`fct_transaction_patterns`** with `type = 'fee'`.
+- Set correct **relationships** in Model view only when joining tables at compatible grain (for example customer-level tables on `customer_id`); avoid many-to-many joins across different grains without careful measures.
+
+### Troubleshooting
+
+| Symptom | What to check |
+|---------|----------------|
+| Cannot connect to server | Docker Desktop is running; `docker compose ps` shows port `5432` published; try `localhost:5432`. |
+| Login failed | Username/password match `.env` (`POSTGRES_USER` / `POSTGRES_PASSWORD`). |
+| Empty **gold** schema or missing tables | Re-run the DAG; confirm Gold dbt tasks succeeded in Airflow logs. |
+| Driver / connector error | Install or update **Npgsql**; restart Power BI Desktop. |
+| SSL / encryption error | Turn off SSL for local Postgres (see step 5 above). |
+| Stale numbers after pipeline run | **Refresh** the report; in Import mode data is a snapshot until refresh. |
+
+### Dashboard pages (screenshots)
+
+The report `powerbi/qversity.pbix` has four report pages. Static exports live in `powerbi/screenshots/`.
+
+#### Executive overview
+
+![Executive overview](powerbi/screenshots/Execute%20overview.png)
+
+This page is the at-a-glance health check for the bank. A treemap of **`balance_usd` by country** shows assets spread fairly evenly across Mexico, Peru, Colombia, Uruguay, Argentina, Brazil, and Chile (each roughly \$555M–\$664M). Transaction activity by **day of week** is balanced (~14% per day), product mix counts are similar across **credit card, savings, checking, and investment**, and **risk tier** counts sit near 1,200–1,300 customers per band. The segment table confirms ~5,000 customers with ~5 products per customer across retail, SME, premium, and private banking; the age × **channel preference** matrix highlights how **digital vs branch/other** adoption varies by cohort—useful for executive prioritization of geography and channel strategy.
+
+#### Revenue & transactions
+
+![Revenue and transactions](powerbi/screenshots/Revenue.png)
+
+Revenue and transaction behavior sit on **`fct_transaction_patterns`** and related Gold tables. Channel-level tables show ~87k transactions with stable **average `amount_usd`** (~\$24.6k) across ATM, branch, mobile, POS, and web; category tables rank spend drivers (healthcare, dining, utilities, etc.) toward ~\$2.05B total volume. **Monthly revenue by loan type** is split evenly across auto, education, mortgage, business, and personal (~20% each). Segment tables tie **customer volume** to **average revenue per customer** (premium leads on revenue per head). Completed **fee revenue by channel** peaks at branch and POS; mobile adoption bars contrast total customers vs app users by segment, and failed vs total transactions show failures as a thin slice—strong operational reliability with room to grow digital fees and app usage.
+
+#### Risk & credit
+
+![Risk and credit](powerbi/screenshots/Risk.png)
+
+Credit risk concentrates on **`fct_credit_risk`** and **`fct_loan_portfolio`**. Country × **credit score bucket** tables and the map overlay expose geographic concentration of Poor/Fair/Good ratings across LATAM. **Utilization buckets** (Low → Very High) pair average utilization % with customer counts and delinquent counts, linking higher utilization to stress. **Delinquency by segment** shows rates ~53% across retail, SME, premium, and private banking—an alarm metric for portfolio committees. Loan-type bars break **portfolio balance %** by status (Current, Delinquent, Default, Paid Off), and the **DPD bucket** table ages the book (current, 1–30, 31–60, 90+ days) by product—supporting collections policy and provisioning conversations.
+
+#### Customer & engagement
+
+![Customer and engagement](powerbi/screenshots/Credit.png)
+
+Despite the filename, this page covers **customer analytics and engagement** from **`fct_customer_profile`**, **`fct_revenue`**, and **`fct_digital_engagement`**. New customers by month trace seasonality (peaks around April, softer year-end). City bars show fairly even urban penetration (Salto, Tijuana, Rio, Cusco, Lima, etc.). A **status** pie splits Active, Inactive, Suspended, and Closed near 25% each. Segment × **age bucket** tables quantify who the bank serves; **revenue by segment** rolls up ~\$106M total with ~\$22.3k average revenue per customer. **KYC status by country** surfaces compliance gaps (Expired, Pending, Rejected, Verified), and the country map bubbles customer counts for geographic expansion or remediation focus.
+
+---
+
+## Stopping and Resetting
 
 ### Stop all containers (keep data)
 
